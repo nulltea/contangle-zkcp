@@ -14,3 +14,16 @@ rand_chacha = "0.3.1"
 crypto = { version = "0.3.0", features = ["aead", "elliptic-curve", "cipher", "std", "digest"]}
 secp256kfun = { version = "0.7.1", features = ["secp256k1"] }
 ecdsa_fun = { version = "0.7.1", features = ["adaptor"] }
+
+ark-std = { version = "^0.3.0", default-features = false }
+ark-relations = { version = "^0.3.0", default-features = false  }
+ark-r1cs-std = { version = "^0.3.0", default-features = false }
+ark-snark = { version = "^0.3.0", default-features = false }
+ark-serialize = { version = "^0.3.0", default-features = false }
+ark-crypto-primitives = { version = "^0.3.0", default-features = true, features = [ "r1cs" ] }
+
+ethers = { version = "0.6.0", features = ["ws"]}
+k256 = { version = "0.9.6", features = ["ecdsa-core"]}
+url = "2.2.2"
+
+tokio = { version = "1", default-features = false, features = ["macros", "rt-multi-thread"] }
