@@ -1,17 +1,18 @@
 use std::str::FromStr;
 use anyhow::anyhow;
-use ark_crypto_primitives::encryption::elgamal::{ElGamal, Parameters};
-use ecdsa_fun::adaptor::{Adaptor, DLEQ, EncryptedSignature, HashTranscript};
+
+use ecdsa_fun::adaptor::{Adaptor, EncryptedSignature, HashTranscript};
 use secp256kfun::{g, G};
 use secp256kfun::marker::*;
 use secp256kfun::{Point, Scalar};
-use secp256kfun::secp256k1::{PublicKey, Secp256k1, SecretKey};
-use rand::rngs::ThreadRng;
-use secp256kfun::nonce::{AddTag, Deterministic};
-use secp256kfun::serde::Serialize;
+
+
+use secp256kfun::nonce::{Deterministic};
+
 use sha2::Sha256;
 use rand_chacha::ChaCha20Rng;
 use ethers::{prelude::*, utils::parse_ether};
+use secp256kfun::hex::HexError;
 use url::Url;
 use crate::types::transaction::eip2718::TypedTransaction;
 
@@ -39,7 +40,7 @@ async fn main() -> anyhow::Result<()> {
     let mut bob = Buyer::new(bob_wallet.clone());
 
     let (ciphertext, data_pk) = alice.step1(data)?;
-    let (tx, encrypted_sig) = bob.step2(&data_pk, alice_address).await?;
+    let (_tx, encrypted_sig) = bob.step2(&data_pk, alice_address).await?;
     let signature = alice.step3(encrypted_sig, bob_address, &bob_wallet).await?;
     let plaintext= bob.step4(&ciphertext, signature)?;
 
@@ -94,17 +95,17 @@ impl Seller {
 
         let r = U256::from_big_endian(&decrypted_sig.R_x.to_bytes());
         let s = U256::from_big_endian(&decrypted_sig.s.to_bytes());
-        let v = 38; //to_eip155_v(0, CHAIN_ID);
+        let v = to_eip155_v(1, CHAIN_ID);
 
-        println!("r: {}\ns: {}\nv: {}\nhash: {}", r, s, v, tx.sighash(from_wallet.chain_id()));
+        println!("[decrypted adaptor] r: {}\ns: {}\nv: {}\nhash: {}\nchain_id: {}", r, s, v, tx.sighash(from_wallet.chain_id()), CHAIN_ID);
 
         // sign a normal ECDSA to compare
         let tx_typed: TypedTransaction = tx.clone().into();
         let sig = from_wallet.sign_transaction(&tx_typed).await?;
-        println!("r: {}\ns: {}\nv: {}\nhash: {}", sig.r, sig.s, sig.v, tx_typed.sighash(from_wallet.chain_id()));
+        println!("[normal ecdsa sign] r: {}\ns: {}\nv: {}\nhash: {}\nchain_id: {}", sig.r, sig.s, sig.v, tx_typed.sighash(from_wallet.chain_id()), from_wallet.chain_id());
 
         let encoded_tx = tx.rlp_signed(&Signature{r,s,v});
-        Signature{r,s,v}.verify(tx_typed.sighash(from_wallet.chain_id()), from_wallet.address())
+        Signature{r,s,v}.verify(tx_typed.sighash(CHAIN_ID), from_wallet.address())
             .map_err(|e| anyhow!("verification error: {e}"))?; // Signature verification failed. Expected 0x7099…79c8, got `...`
 
         let _ = provider.send_raw_transaction(encoded_tx)
@@ -178,6 +179,12 @@ fn keypair_gen() -> (Scalar, Point) {
     (sk, pk)
 }
 
+fn keypair_from(hex: &str) -> Result<(Scalar, Point), HexError> {
+    let sk = Scalar::from_str(hex)?;
+    let pk = g!(sk * G).mark::<Normal>();
+    Ok((sk, pk))
+}
+
 fn encrypt(pk: &Point, plaintext: &[u8]) -> anyhow::Result<Vec<u8>> {
     let pk = pk.to_bytes();
     ecies::encrypt(&pk, plaintext).map_err(|e| anyhow!("encryption failed: {e}"))
@@ -190,3 +197,103 @@ fn decrypt(sk: &Scalar, ciphertext: &[u8]) -> anyhow::Result<Vec<u8>> {
     ecies::decrypt(&sk, ciphertext).map_err(|e| anyhow!("decryption failed: {e}"))
 }
 
+#[cfg(test)]
+mod tests {
+    use std::str::FromStr;
+    use anyhow::anyhow;
+    use ecdsa_fun::adaptor::{Adaptor, HashTranscript};
+    use ecdsa_fun::ECDSA;
+    use ethers::prelude::*;
+    use ethers::utils::parse_ether;
+    use rand_chacha::ChaCha20Rng;
+    use secp256kfun::nonce::Deterministic;
+    use sha2::Sha256;
+    use url::Url;
+    use crate::{keypair_from, keypair_gen, LocalWallet, TransactionRequest, TypedTransaction};
+
+    const ALICE_SK: &str = "ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
+    const BOB_SK: &str = "59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d";
+    const CHAIN_ID: u64 = 1;
+
+    #[test]
+    fn verify_decrypted_adaptor_on_ethereum() {
+        let (sk, pk) = keypair_from(BOB_SK).unwrap();
+        let (data_sk, data_pk) = keypair_gen();
+        let nonce_gen = Deterministic::<Sha256>::default();
+        let adaptor = Adaptor::<HashTranscript<Sha256, ChaCha20Rng>, _>::new(nonce_gen);
+
+        let alice_wallet = LocalWallet::from_str(ALICE_SK).unwrap();
+        let bob_wallet = LocalWallet::from_str(BOB_SK).unwrap();
+        let bob_address = bob_wallet.address();
+        let transfer_tx = TransactionRequest::new()
+            .from(bob_wallet.address())
+            .to(alice_wallet.address())
+            .value(parse_ether(10).unwrap());
+
+        let tx_encoded = transfer_tx.sighash(CHAIN_ID);
+        let encrypted_sig = adaptor.encrypted_sign(&sk, &data_pk, tx_encoded.as_fixed_bytes());
+
+        let decrypted_sig = adaptor.decrypt_signature(&data_sk, encrypted_sig.clone());
+
+
+        let r = U256::from_big_endian(&decrypted_sig.R_x.to_bytes());
+        let s = U256::from_big_endian(&decrypted_sig.s.to_bytes());
+        let v = to_eip155_v(1, CHAIN_ID);
+
+        println!("r: {}\ns: {}\nv: {}\nhash: {}\na: {}", r, s, v, transfer_tx.sighash(CHAIN_ID), bob_wallet.address());
+
+        // sign a normal ECDSA to compare
+        // let tx_typed: TypedTransaction = transfer_tx.clone().into();
+        // let sig = bob_wallet.sign_transaction(&tx_typed).await?;
+        // println!("[normal ecdsa sign] r: {}\ns: {}\nv: {}\nhash: {}", sig.r, sig.s, sig.v, tx_typed.sighash(CHAIN_ID));
+
+        let encoded_signed_tx = transfer_tx.rlp_signed(&Signature{r,s,v});
+        let res = Signature{r,s,v}.verify(encoded_signed_tx, bob_wallet.address());
+
+        if let Err(ref e) = res {
+            println!("{e}");
+        }
+
+        assert!(res.is_ok())
+    }
+
+    #[test]
+    fn verify_plain_ecdsa_on_ethereum() {
+        let (sk, pk) = keypair_from(BOB_SK).unwrap();
+        let nonce_gen = Deterministic::<Sha256>::default();
+        let ecdsa = ECDSA::new(nonce_gen);
+
+        let alice_wallet = LocalWallet::from_str(ALICE_SK).unwrap();
+        let bob_wallet = LocalWallet::from_str(BOB_SK).unwrap();
+        let bob_address = bob_wallet.address();
+        let transfer_tx = TransactionRequest::new()
+            .from(bob_wallet.address())
+            .to(alice_wallet.address())
+            .value(parse_ether(10).unwrap());
+
+        let tx_encoded = transfer_tx.sighash(CHAIN_ID);
+        let sig_data = ecdsa.sign(&sk, tx_encoded.as_fixed_bytes());
+
+
+        let r = U256::from_big_endian(&sig_data.R_x.to_bytes());
+        let s = U256::from_big_endian(&sig_data.s.to_bytes());
+        let v = to_eip155_v(1, CHAIN_ID);
+
+        println!("r: {}\ns: {}\nv: {}\nhash: {}\na: {}", r, s, v, transfer_tx.sighash(CHAIN_ID), bob_wallet.address());
+
+        // sign a normal ECDSA to compare
+        // let tx_typed: TypedTransaction = transfer_tx.clone().into();
+        // let sig = bob_wallet.sign_transaction(&tx_typed).await?;
+        // println!("[normal ecdsa sign] r: {}\ns: {}\nv: {}\nhash: {}", sig.r, sig.s, sig.v, tx_typed.sighash(CHAIN_ID));
+
+        let encoded_signed_tx = transfer_tx.rlp_signed(&Signature{r,s,v});
+        let res = Signature{r,s,v}.verify(encoded_signed_tx, bob_wallet.address());
+
+
+        if let Err(ref e) = res {
+            println!("{e}");
+        }
+
+        assert!(res.is_ok())
+    }
+}
