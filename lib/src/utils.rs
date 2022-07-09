@@ -1,8 +1,8 @@
 use std::str::FromStr;
 use anyhow::anyhow;
-use secp256kfun::{Point, Scalar};
+use secp256kfun::{g, Point, Scalar};
 use secp256kfun::hex::HexError;
-use secp256kfun::marker::Normal;
+use secp256kfun::marker::{Mark, Normal};
 
 pub fn keypair_gen() -> (Scalar, Point) {
     let sk = Scalar::random(&mut rand::thread_rng());

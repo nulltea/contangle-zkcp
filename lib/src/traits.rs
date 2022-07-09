@@ -15,7 +15,6 @@ pub trait ChainProvider {
     async fn get_signature(&self, hash: H256) -> Result<Option<Signature>, Self::Error>;
 }
 
-#[async_trait]
 pub trait WalletProvider {
     fn pub_key(&self) -> &Point;
     fn sec_key(&self) -> &Scalar;
