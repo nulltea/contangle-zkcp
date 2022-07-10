@@ -1,25 +1,25 @@
-use std::collections::hash_map::Entry;
-use std::collections::HashMap;
+use crate::traits::ChainProvider;
+use crate::utils::{encrypt, keypair_from_hex, keypair_gen};
 use anyhow::anyhow;
 use ecdsa_fun::adaptor::{Adaptor, EncryptedSignature, HashTranscript};
 use ethers::prelude::*;
 use ethers::utils::keccak256;
 use futures::channel::{mpsc, oneshot};
 use rand_chacha::ChaCha20Rng;
-use secp256kfun::{g, Point, Scalar};
 use secp256kfun::marker::{Mark, Normal};
 use secp256kfun::nonce::Deterministic;
+use secp256kfun::{g, Point, Scalar, G};
 use sha2::Sha256;
-use crate::NameOrAddress::Address;
-use crate::traits::{ChainProvider, WalletProvider};
-use crate::utils::{encrypt, keypair_from, keypair_gen};
+use std::collections::hash_map::Entry;
+use std::collections::HashMap;
+use std::str::FromStr;
 
-pub struct Seller<TChainProvider, TWalletProvider> {
+pub struct Seller<TChainProvider> {
     data: Vec<u8>,
-    cost: f64,
+    cost: u64,
     adaptor: Adaptor<HashTranscript<Sha256, ChaCha20Rng>, Deterministic<Sha256>>,
     chain: TChainProvider,
-    wallet: TWalletProvider,
+    wallet: crate::LocalWallet,
     from_buyers: mpsc::Receiver<SellerMsg>,
     data_keys: HashMap<Address, Scalar>,
 }
@@ -38,35 +38,50 @@ pub enum SellerMsg {
     },
 }
 
-impl<TChainProvider: ChainProvider, TWalletProvider: WalletProvider> Seller<TChainProvider, TWalletProvider> {
-    fn new(data: Vec<u8>, cost: f64, chain: TChainProvider, wallet: TWalletProvider) -> (Self, mpsc::Sender<SellerMsg>) {
+impl<TChainProvider: ChainProvider> Seller<TChainProvider> {
+    pub fn new(
+        data: Vec<u8>,
+        cost: u64,
+        chain: TChainProvider,
+        wallet: crate::LocalWallet,
+    ) -> (Self, mpsc::Sender<SellerMsg>) {
         let nonce_gen = Deterministic::<Sha256>::default();
         let adaptor = Adaptor::<HashTranscript<Sha256, ChaCha20Rng>, _>::new(nonce_gen);
         let (to_seller, from_buyers) = mpsc::channel(1);
 
-        (Self {
-            data,
-            cost,
-            adaptor,
-            data_keys: HashMap::default(),
-            chain,
-            from_buyers,
-            wallet,
-        }, to_seller)
+        (
+            Self {
+                data,
+                cost,
+                adaptor,
+                data_keys: HashMap::default(),
+                chain,
+                from_buyers,
+                wallet,
+            },
+            to_seller,
+        )
     }
 
-    pub fn run(mut self) {
+    pub async fn run(mut self) {
         loop {
             if let Some(msg) = self.from_buyers.next().await {
                 match msg {
                     SellerMsg::Step1 { address, resp_tx } => {
                         let (data_sk, data_pk) = keypair_gen();
                         let _ = self.data_keys.insert(address, data_sk);
-                        if let Err(_) = resp_tx.send(encrypt(&data_pk, data).map(|ciphertext| (ciphertext, data_pk, self.wallet.address()))) {
+                        if let Err(_) = resp_tx.send(
+                            encrypt(&data_pk, &*self.data)
+                                .map(|ciphertext| (ciphertext, data_pk, self.wallet.address())),
+                        ) {
                             self.data_keys.remove(&address); // todo: DoS defense needed.
                         }
                     }
-                    SellerMsg::Step3 { pub_key, enc_sig, resp_tx } => {
+                    SellerMsg::Step3 {
+                        pub_key,
+                        enc_sig,
+                        resp_tx,
+                    } => {
                         let address = Address::from_slice(&keccak256(pub_key.to_bytes()));
                         let decryption_key = match self.data_keys.entry(address) {
                             Entry::Occupied(e) => e.remove(),
@@ -76,19 +91,25 @@ impl<TChainProvider: ChainProvider, TWalletProvider: WalletProvider> Seller<TCha
                             }
                         };
 
-                        let (pay_tx, tx_hash) = self.chain.compose_tx(address, self.wallet.address(), self.cost);
+                        let (pay_tx, tx_hash) =
+                            self.chain
+                                .compose_tx(address, self.wallet.address(), self.cost);
 
-                        let data_pk = g!(sk * G).mark::<Normal>();
-                        if !self.adaptor.verify_encrypted_signature(&pub_key, &data_pk, &*tx_hash[..], &enc_sig) {
+                        let data_pk = g!(decryption_key * G).mark::<Normal>();
+                        if !self.adaptor.verify_encrypted_signature(
+                            &pub_key,
+                            &data_pk,
+                            tx_hash.as_fixed_bytes(),
+                            &enc_sig,
+                        ) {
                             let _ = resp_tx.send(Err(anyhow!("invalid adaptor signature")));
                             continue;
                         }
 
-                        let decrypted_sig = self
-                            .adaptor
-                            .decrypt_signature(&decryption_key, enc_sig);
+                        let decrypted_sig =
+                            self.adaptor.decrypt_signature(&decryption_key, enc_sig);
 
-                        let _ = resp_tx.send(self.chain.sent_signed(pay_tx, &decrypted_sig));
+                        let _ = resp_tx.send(self.chain.sent_signed(pay_tx, &decrypted_sig).await);
                     }
                 }
             }

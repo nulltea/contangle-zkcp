@@ -1,26 +1,26 @@
+use crate::traits::ChainProvider;
+use crate::utils::decrypt;
 use anyhow::anyhow;
 use backoff::ExponentialBackoff;
 use ecdsa_fun::adaptor::{Adaptor, EncryptedSignature, HashTranscript};
 use ecdsa_fun::Signature;
-use ethers::prelude::{Address, H256, LocalWallet};
+use ethers::prelude::{Address, LocalWallet, H256};
 use rand_chacha::ChaCha20Rng;
-use secp256kfun::{Point, Scalar};
 use secp256kfun::nonce::Deterministic;
+use secp256kfun::{Point, Scalar};
 use sha2::Sha256;
-use crate::traits::{ChainProvider, WalletProvider};
-use crate::utils::decrypt;
 
-struct Buyer<TChainProvider, TWalletProvider> {
+struct Buyer<TChainProvider> {
     chain: TChainProvider,
-    wallet: TWalletProvider,
+    wallet: crate::LocalWallet,
     adaptor: Adaptor<HashTranscript<Sha256, ChaCha20Rng>, Deterministic<Sha256>>,
     ciphertext: Option<Vec<u8>>,
     data_pk: Option<Point>,
     encrypted_sig: Option<EncryptedSignature>,
 }
 
-impl<TChainProvider: ChainProvider, TWalletProvider: WalletProvider> Buyer<TChainProvider, TWalletProvider> {
-    fn new(chain: TChainProvider, wallet: TWalletProvider) -> Self {
+impl<TChainProvider: ChainProvider> Buyer<TChainProvider> {
+    fn new(chain: TChainProvider, wallet: crate::LocalWallet) -> Self {
         let nonce_gen = Deterministic::<Sha256>::default();
         let adaptor = Adaptor::<HashTranscript<Sha256, ChaCha20Rng>, _>::new(nonce_gen);
 
@@ -36,14 +36,22 @@ impl<TChainProvider: ChainProvider, TWalletProvider: WalletProvider> Buyer<TChai
 
     /// Step 2: Bob signs a transaction to transfer coins to Alice address
     /// and encrypts it with `data_pk` and sends it to Alice.
-    async fn step2(&mut self, ciphertext: &[u8], data_pk: &Point, addr_to: Address, amount: f64) -> anyhow::Result<EncryptedSignature> {
+    async fn step2(
+        &mut self,
+        ciphertext: &[u8],
+        data_pk: &Point,
+        addr_to: Address,
+        amount: u64,
+    ) -> anyhow::Result<EncryptedSignature> {
         let _ = self.ciphertext.insert(ciphertext.to_vec());
         let _ = self.data_pk.insert(data_pk.clone());
-        let (_, tx_hash) = self.chain.compose_tx(self.wallet.address(), addr_to, amount);
+        let (_, tx_hash) = self
+            .chain
+            .compose_tx(self.wallet.address(), addr_to, amount);
 
         let encrypted_sig =
             self.adaptor
-                .encrypted_sign(self.wallet.sec_key(), data_pk, &*tx_hash[..]);
+                .encrypted_sign(self.wallet.sec_key(), data_pk, tx_hash.as_fixed_bytes());
 
         let _ = self.encrypted_sig.insert(encrypted_sig.clone());
 
@@ -52,17 +60,15 @@ impl<TChainProvider: ChainProvider, TWalletProvider: WalletProvider> Buyer<TChai
 
     /// Step 4: Bob observes signature on-chain and use it to recover `data_sk`
     /// and decrypt the data file from the ciphertext given to him by Alice.
-    async fn step4(
-        &mut self,
-        tx_hash: H256,
-    ) -> anyhow::Result<Vec<u8>> {
+    async fn step4(&mut self, tx_hash: H256) -> anyhow::Result<Vec<u8>> {
         let signature = backoff::future::retry(ExponentialBackoff::default(), || async {
             match self.chain.get_signature(tx_hash).await {
                 Ok(Some(sig)) => Ok(sig),
                 Ok(None) => Err(backoff::Error::transient(anyhow!("tx not found"))),
-                Err(e) => Err(backoff::Error::permanent(e))
+                Err(e) => Err(backoff::Error::permanent(e)),
             }
-        }).await?;
+        })
+        .await?;
 
         let recovered_sk = self
             .adaptor
@@ -73,6 +79,6 @@ impl<TChainProvider: ChainProvider, TWalletProvider: WalletProvider> Buyer<TChai
             )
             .unwrap();
 
-        decrypt(&recovered_sk, ciphertext)
+        decrypt(&recovered_sk, &*self.ciphertext.take().unwrap())
     }
 }
