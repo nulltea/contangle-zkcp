@@ -1,0 +1,29 @@
+[package]
+name = "scriptless-zkcp"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = "1.0.57"
+rand = "0.8.5"
+futures = "0.3.21"
+async-trait = "0.1.56"
+sha2 = { version = "0.9"}
+sha3 = { version = "0.9"}
+ecies = "0.2.2"
+rand_chacha = "0.3.1"
+crypto = { version = "0.3.0", features = ["aead", "elliptic-curve", "cipher", "std", "digest"]}
+secp256kfun = { version = "0.7.1", features = ["secp256k1"] }
+ecdsa_fun = { version = "0.7.1", features = ["adaptor"] }
+byte-slice-cast = "1.2.1"
+
+backoff = {version = "0.4.0", features = ["tokio"]}
+
+ethers = { version = "0.6.0" }
+eth-keystore = "0.4.1"
+k256 = { version = "0.9.6", features = ["ecdsa-core"]}
+url = "2.2.2"
+bip39 = "1.0.1"
+hex = "0.4.3"
+
+tokio = { version = "1", default-features = false, features = ["macros", "rt-multi-thread"] }
