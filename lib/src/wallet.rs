@@ -1,7 +1,7 @@
 use crate::utils::keypair_from_hex;
 use crate::{keypair_gen, read_from_keystore};
 use ethers::prelude::Address;
-use ethers::utils::keccak256;
+use k256::ecdsa::SigningKey;
 use secp256kfun::{Point, Scalar};
 use std::path::Path;
 use std::{fs, io};
@@ -36,9 +36,5 @@ impl LocalWallet {
 
     pub fn sec_key(&self) -> &Scalar {
         &self.sk
-    }
-
-    pub fn address(&self) -> Address {
-        Address::from_slice(&keccak256(self.pk.to_bytes()))
     }
 }

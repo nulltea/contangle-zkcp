@@ -2,19 +2,21 @@
 
 mod args;
 
-use crate::args::{CLIArgs, Command, SellArgs, SetupArgs};
+use crate::args::{BuyArgs, CLIArgs, Command, SellArgs, SetupArgs};
 use anyhow::anyhow;
 use async_std::fs;
 use async_std::path::Path;
 use async_std::task::Task;
+use chrono;
 use gumdrop::Options;
 use inquire::error::InquireResult;
 use inquire::{Confirm, Password, Select, Text};
-use scriptless_zkcp::ChainProvider;
 use scriptless_zkcp::{
-    keypair_from_bip39, keypair_from_hex, keypair_gen, write_to_keystore, EthereumProvider,
-    LocalWallet, Seller,
+    keypair_from_bip39, keypair_from_hex, keypair_gen, write_to_keystore, Ethereum, LocalWallet,
+    Seller, WEI_IN_ETHER,
 };
+use scriptless_zkcp::{Buyer, ChainProvider};
+use server::client;
 use std::error::Error;
 use std::ops::Index;
 use std::process;
@@ -43,6 +45,7 @@ async fn main() -> anyhow::Result<()> {
     match command {
         Command::Setup(args) => setup(args).await?,
         Command::Sell(args) => sell(args).await?,
+        Command::Buy(args) => buy(args).await?,
     }
 
     Ok(())
@@ -91,12 +94,14 @@ async fn sell(args: SellArgs) -> anyhow::Result<()> {
         .await
         .map_err(|e| anyhow!("error reading data: {e}"))?;
     let rpc_url = Url::parse(&args.rpc_address).map_err(|e| anyhow!("bad rpc address: {e}"))?;
-    let eth_provider = EthereumProvider::new(rpc_url).await;
+    let eth_provider = Ethereum::new(rpc_url).await;
 
     let price_str = args
         .price
         .unwrap_or_else(|| Text::new("Price (ETH):").prompt().unwrap());
-    let price = eth_provider.parse_amount(&price_str)?;
+    let price: f64 = price_str
+        .parse()
+        .map_err(|e| anyhow!("error parsing price: {e}"))?;
 
     let (seller, to_runtime) = Seller::new(data, price, eth_provider, wallet);
 
@@ -104,7 +109,69 @@ async fn sell(args: SellArgs) -> anyhow::Result<()> {
         seller.run().await;
     });
 
-    server::serve(to_runtime).await;
+    server::serve(to_runtime, price).await;
+
+    Ok(())
+}
+
+async fn buy(args: BuyArgs) -> anyhow::Result<()> {
+    let rpc_url = Url::parse(&args.rpc_address).map_err(|e| anyhow!("bad rpc address: {e}"))?;
+    let eth_provider = Ethereum::new(rpc_url).await;
+
+    let client = client::SellerClient::new(args.seller_address)?;
+    let price = client.price().await?;
+    if !Confirm::new(&format!("Price is {price} ETH. Continue? (y/N): "))
+        .prompt()
+        .unwrap()
+    {
+        return Ok(());
+    }
+    let name = args
+        .wallet_name
+        .unwrap_or_else(|| Text::new("Wallet name:").prompt().unwrap());
+    let password = args
+        .password
+        .unwrap_or_else(|| Password::new("Password:").prompt().unwrap());
+    let keystore = Path::new(&args.keystore_dir).join(name);
+    let wallet = LocalWallet::from_keystore(keystore, password)?;
+    let address = eth_provider.address_from_pk(wallet.pub_key());
+    let pub_key = wallet.pub_key().clone();
+
+    let mut buyer = Buyer::new(eth_provider, wallet);
+
+    let (ciphertext, data_pk, buyer_address) = client.step1(address).await?;
+
+    // todo: cache ciphertext, data_pk, buyer_address.
+
+    if !Confirm::new(&format!(
+        "Data cipher text received. Sign transfer transaction to address 0x{address}? (y/N): "
+    ))
+    .prompt()
+    .unwrap()
+    {
+        return Ok(());
+    }
+
+    let enc_sig = buyer
+        .step2(&ciphertext, &data_pk, buyer_address, price)
+        .await?;
+
+    let tx_hash = client.step3(pub_key, enc_sig).await?;
+
+    let data = buyer.step4(tx_hash).await?;
+
+    let data_path = args.data_path.unwrap_or_else(|| {
+        Text::new("File decrypted! Where to save the result?:")
+            .with_default(&format!("purchase_{}", chrono::Local::today().to_string()))
+            .prompt()
+            .unwrap()
+    });
+
+    let data_path = Path::new(&data_path);
+    let _ = fs::create_dir_all(data_path.parent().unwrap()).await;
+    fs::write(data_path, data)
+        .await
+        .map_err(|e| anyhow!("error writing decrypted data: {e}"))?;
 
     Ok(())
 }

@@ -2,16 +2,19 @@ use crate::traits::ChainProvider;
 use anyhow::anyhow;
 use async_trait::async_trait;
 use ethers::prelude::*;
-use ethers::utils::parse_ether;
-use secp256kfun::{marker::*, Scalar};
+use ethers::utils::{keccak256, parse_ether, secret_key_to_address};
+use secp256kfun::{marker::*, Point, Scalar};
 use url::Url;
 
-pub struct EthereumProvider {
+pub use ethers::utils::WEI_IN_ETHER;
+use k256::{ecdsa::SigningKey, EncodedPoint as K256PublicKey};
+
+pub struct Ethereum {
     provider: Provider<Http>,
     chain_id: u64,
 }
 
-impl EthereumProvider {
+impl Ethereum {
     pub async fn new(url: impl Into<Url>) -> Self {
         let provider = Provider::new(Http::new(url));
         let chain_id = provider.get_chainid().await.unwrap();
@@ -24,29 +27,33 @@ impl EthereumProvider {
 }
 
 #[async_trait]
-impl ChainProvider for EthereumProvider {
+impl ChainProvider for Ethereum {
     type Tx = TransactionRequest;
 
-    fn compose_tx(&self, from: Address, to: Address, amount: u64) -> (Self::Tx, H256) {
+    fn compose_tx(
+        &self,
+        from: Address,
+        to: Address,
+        amount: f64,
+    ) -> anyhow::Result<(Self::Tx, H256)> {
         let tx = TransactionRequest::new()
-            .chain_id(self.chain_id)
             .from(from)
             .to(to)
-            .value(parse_ether(amount).unwrap());
+            .value(parse_ether(amount).map_err(|e| anyhow!("error parsing ether: {e}"))?);
 
-        let tx_hash = tx.sighash();
+        let tx_hash = tx.sighash(self.chain_id);
 
-        (tx, tx_hash)
+        Ok((tx, tx_hash))
     }
 
     async fn sent_signed(&self, tx: Self::Tx, sig: &ecdsa_fun::Signature) -> anyhow::Result<H256> {
         let from = tx.from.unwrap();
-        let m = tx.sighash();
+        let m = tx.sighash(self.chain_id);
         let r = U256::from_big_endian(&sig.R_x.to_bytes());
         let s = U256::from_big_endian(&sig.s.to_bytes());
         let v = {
             let v = to_eip155_v(1, self.chain_id);
-            let recid = Signature { r, s, v }.verify(m, from).is_ok();
+            let recid = Signature { r, s, v }.verify(m, from).is_ok() as u8;
             to_eip155_v(recid, self.chain_id)
         };
 
@@ -100,9 +107,13 @@ impl ChainProvider for EthereumProvider {
             })
     }
 
-    fn parse_amount<S: AsRef<str>>(&self, amount: S) -> anyhow::Result<u64> {
-        Ok(parse_ether(amount.as_ref())
-            .map_err(|e| anyhow!("error pasring ether: {e}"))?
-            .as_u64())
+    fn address_from_pk(&self, pk: &Point) -> Address {
+        let uncompressed_pub_key = K256PublicKey::from_bytes(pk.to_bytes())
+            .unwrap()
+            .decompress();
+        let public_key = uncompressed_pub_key.unwrap().to_bytes();
+        debug_assert_eq!(public_key[0], 0x04);
+        let hash = keccak256(&public_key[1..]);
+        Address::from_slice(&hash[12..])
     }
 }

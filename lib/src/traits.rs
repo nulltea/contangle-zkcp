@@ -7,11 +7,16 @@ use secp256kfun::{marker::*, Point, Scalar};
 pub trait ChainProvider {
     type Tx;
 
-    fn compose_tx(&self, from: Address, to: Address, amount: u64) -> (Self::Tx, H256);
+    fn compose_tx(
+        &self,
+        from: Address,
+        to: Address,
+        amount: f64,
+    ) -> anyhow::Result<(Self::Tx, H256)>;
 
     async fn sent_signed(&self, tx: Self::Tx, sig: &Signature) -> anyhow::Result<H256>;
 
     async fn get_signature(&self, hash: H256) -> anyhow::Result<Option<Signature>>;
 
-    fn parse_amount<S: AsRef<str>>(&self, amount: S) -> anyhow::Result<u64>;
+    fn address_from_pk(&self, pk: &Point) -> Address;
 }

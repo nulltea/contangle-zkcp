@@ -19,10 +19,11 @@ byte-slice-cast = "1.2.1"
 
 backoff = {version = "0.4.0", features = ["tokio"]}
 
-ethers = { version = "0.13.0"}
+ethers = { version = "0.6.0" }
 eth-keystore = "0.4.1"
 k256 = { version = "0.9.6", features = ["ecdsa-core"]}
 url = "2.2.2"
 bip39 = "1.0.1"
+hex = "0.4.3"
 
 tokio = { version = "1", default-features = false, features = ["macros", "rt-multi-thread"] }

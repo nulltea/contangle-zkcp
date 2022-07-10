@@ -1,3 +1,5 @@
+pub mod client;
+
 #[macro_use]
 extern crate rocket;
 
@@ -13,14 +15,22 @@ use rocket::{response, State};
 use scriptless_zkcp::SellerMsg;
 use secp256kfun::hex::HexError;
 use secp256kfun::Point;
+use serde::de::DeserializeOwned;
 use std::borrow::BorrowMut;
 use std::str::FromStr;
 
 struct Runtime {
     tx: mpsc::Sender<SellerMsg>,
+    price: f64,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
+#[serde(crate = "rocket::serde")]
+struct InfoResponse {
+    price: f64,
+}
+
+#[derive(Serialize, Deserialize)]
 #[serde(crate = "rocket::serde")]
 struct Step1Response {
     ciphertext: Vec<u8>,
@@ -33,6 +43,11 @@ struct Step1Response {
 struct Step3Request<'r> {
     pub_key: &'r str,
     enc_sig: &'r str,
+}
+
+#[get("/info")]
+async fn info(state: &State<Runtime>) -> Json<InfoResponse> {
+    Json(InfoResponse { price: state.price })
 }
 
 #[get("/step1/<address>")]
@@ -60,8 +75,8 @@ async fn step1(
 
     Ok(Json(Step1Response {
         ciphertext,
-        data_pk: data_pk.to_string(),
-        address: address.to_string(),
+        data_pk: hex::encode(data_pk.to_bytes()),
+        address: hex::encode(address.to_fixed_bytes()),
     }))
 }
 
@@ -90,16 +105,19 @@ async fn step3(
         .await
         .map_err(|e| status::Custom(Status::ServiceUnavailable, e.to_string()))?
         .map_err(|e| status::Custom(Status::InternalServerError, e.to_string()))?
-        .to_string();
+        .to_fixed_bytes();
 
-    Ok(tx_hash)
+    Ok(hex::encode(tx_hash))
 }
 
 #[allow(unused_must_use)]
-pub async fn serve(to_runtime: mpsc::Sender<SellerMsg>) {
+pub async fn serve(to_runtime: mpsc::Sender<SellerMsg>, price: f64) {
     rocket::build()
-        .manage(Runtime { tx: to_runtime })
-        .mount("/", routes![step1, step3])
+        .manage(Runtime {
+            tx: to_runtime,
+            price,
+        })
+        .mount("/", routes![info, step1, step3])
         .launch()
         .await
         .expect("expect server to run");

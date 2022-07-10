@@ -10,7 +10,7 @@ use secp256kfun::nonce::Deterministic;
 use secp256kfun::{Point, Scalar};
 use sha2::Sha256;
 
-struct Buyer<TChainProvider> {
+pub struct Buyer<TChainProvider> {
     chain: TChainProvider,
     wallet: crate::LocalWallet,
     adaptor: Adaptor<HashTranscript<Sha256, ChaCha20Rng>, Deterministic<Sha256>>,
@@ -20,7 +20,7 @@ struct Buyer<TChainProvider> {
 }
 
 impl<TChainProvider: ChainProvider> Buyer<TChainProvider> {
-    fn new(chain: TChainProvider, wallet: crate::LocalWallet) -> Self {
+    pub fn new(chain: TChainProvider, wallet: crate::LocalWallet) -> Self {
         let nonce_gen = Deterministic::<Sha256>::default();
         let adaptor = Adaptor::<HashTranscript<Sha256, ChaCha20Rng>, _>::new(nonce_gen);
 
@@ -36,18 +36,20 @@ impl<TChainProvider: ChainProvider> Buyer<TChainProvider> {
 
     /// Step 2: Bob signs a transaction to transfer coins to Alice address
     /// and encrypts it with `data_pk` and sends it to Alice.
-    async fn step2(
+    pub async fn step2(
         &mut self,
         ciphertext: &[u8],
         data_pk: &Point,
         addr_to: Address,
-        amount: u64,
+        amount: f64,
     ) -> anyhow::Result<EncryptedSignature> {
         let _ = self.ciphertext.insert(ciphertext.to_vec());
         let _ = self.data_pk.insert(data_pk.clone());
-        let (_, tx_hash) = self
-            .chain
-            .compose_tx(self.wallet.address(), addr_to, amount);
+        let (_, tx_hash) = self.chain.compose_tx(
+            self.chain.address_from_pk(self.wallet.pub_key()),
+            addr_to,
+            amount,
+        )?;
 
         let encrypted_sig =
             self.adaptor
@@ -60,7 +62,7 @@ impl<TChainProvider: ChainProvider> Buyer<TChainProvider> {
 
     /// Step 4: Bob observes signature on-chain and use it to recover `data_sk`
     /// and decrypt the data file from the ciphertext given to him by Alice.
-    async fn step4(&mut self, tx_hash: H256) -> anyhow::Result<Vec<u8>> {
+    pub async fn step4(&mut self, tx_hash: H256) -> anyhow::Result<Vec<u8>> {
         let signature = backoff::future::retry(ExponentialBackoff::default(), || async {
             match self.chain.get_signature(tx_hash).await {
                 Ok(Some(sig)) => Ok(sig),

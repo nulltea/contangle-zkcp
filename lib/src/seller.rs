@@ -16,7 +16,7 @@ use std::str::FromStr;
 
 pub struct Seller<TChainProvider> {
     data: Vec<u8>,
-    cost: u64,
+    cost: f64,
     adaptor: Adaptor<HashTranscript<Sha256, ChaCha20Rng>, Deterministic<Sha256>>,
     chain: TChainProvider,
     wallet: crate::LocalWallet,
@@ -41,7 +41,7 @@ pub enum SellerMsg {
 impl<TChainProvider: ChainProvider> Seller<TChainProvider> {
     pub fn new(
         data: Vec<u8>,
-        cost: u64,
+        cost: f64,
         chain: TChainProvider,
         wallet: crate::LocalWallet,
     ) -> (Self, mpsc::Sender<SellerMsg>) {
@@ -70,9 +70,10 @@ impl<TChainProvider: ChainProvider> Seller<TChainProvider> {
                     SellerMsg::Step1 { address, resp_tx } => {
                         let (data_sk, data_pk) = keypair_gen();
                         let _ = self.data_keys.insert(address, data_sk);
+                        let local_address = self.chain.address_from_pk(self.wallet.pub_key());
                         if let Err(_) = resp_tx.send(
                             encrypt(&data_pk, &*self.data)
-                                .map(|ciphertext| (ciphertext, data_pk, self.wallet.address())),
+                                .map(|ciphertext| (ciphertext, data_pk, local_address)),
                         ) {
                             self.data_keys.remove(&address); // todo: DoS defense needed.
                         }
@@ -82,7 +83,8 @@ impl<TChainProvider: ChainProvider> Seller<TChainProvider> {
                         enc_sig,
                         resp_tx,
                     } => {
-                        let address = Address::from_slice(&keccak256(pub_key.to_bytes()));
+                        let local_address = self.chain.address_from_pk(self.wallet.pub_key());
+                        let address = self.chain.address_from_pk(&pub_key);
                         let decryption_key = match self.data_keys.entry(address) {
                             Entry::Occupied(e) => e.remove(),
                             Entry::Vacant(_) => {
@@ -91,9 +93,10 @@ impl<TChainProvider: ChainProvider> Seller<TChainProvider> {
                             }
                         };
 
-                        let (pay_tx, tx_hash) =
-                            self.chain
-                                .compose_tx(address, self.wallet.address(), self.cost);
+                        let (pay_tx, tx_hash) = self
+                            .chain
+                            .compose_tx(address, local_address, self.cost)
+                            .unwrap();
 
                         let data_pk = g!(decryption_key * G).mark::<Normal>();
                         if !self.adaptor.verify_encrypted_signature(
@@ -105,7 +108,6 @@ impl<TChainProvider: ChainProvider> Seller<TChainProvider> {
                             let _ = resp_tx.send(Err(anyhow!("invalid adaptor signature")));
                             continue;
                         }
-
                         let decrypted_sig =
                             self.adaptor.decrypt_signature(&decryption_key, enc_sig);
 
