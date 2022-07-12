@@ -3,7 +3,7 @@ pub mod client;
 #[macro_use]
 extern crate rocket;
 
-use anyhow::anyhow;
+
 use ecdsa_fun::adaptor::EncryptedSignature;
 use ethers::prelude::*;
 use futures::channel::{mpsc, oneshot};
@@ -11,12 +11,12 @@ use futures_util::{SinkExt, TryFutureExt};
 use rocket::http::Status;
 use rocket::response::status;
 use rocket::serde::{json::Json, Deserialize, Serialize};
-use rocket::{response, State};
+use rocket::{State};
 use scriptless_zkcp::SellerMsg;
-use secp256kfun::hex::HexError;
+
 use secp256kfun::Point;
-use serde::de::DeserializeOwned;
-use std::borrow::BorrowMut;
+
+
 use std::str::FromStr;
 
 struct Runtime {

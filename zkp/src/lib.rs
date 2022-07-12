@@ -5,15 +5,15 @@ use ark_crypto_primitives::encryption::elgamal::{
 use ark_crypto_primitives::encryption::{AsymmetricEncryptionGadget, AsymmetricEncryptionScheme};
 use ark_crypto_primitives::Error;
 use ark_ec::ProjectiveCurve;
-use ark_ed_on_bls12_381::{constraints::EdwardsVar, EdwardsProjective as JubJub, Fq};
-use ark_ff::{BitIteratorLE, Field, PrimeField};
+
+use ark_ff::{PrimeField};
 use ark_r1cs_std::groups::CurveVar;
 use ark_r1cs_std::prelude::*;
 use ark_relations::r1cs::{ConstraintSynthesizer, ConstraintSystemRef, SynthesisError};
-use ark_serialize::EdwardsFlags;
+
 use ark_sponge::constraints::CryptographicSpongeVar;
-use ark_sponge::poseidon::{constraints::PoseidonSpongeVar, PoseidonParameters, PoseidonSponge};
-use ark_sponge::{constraints::AbsorbGadget, Absorb, CryptographicSponge};
+
+use ark_sponge::{CryptographicSponge};
 use ark_std::marker::PhantomData;
 use ark_std::rand::Rng;
 use ark_std::vec::Vec;
@@ -139,11 +139,11 @@ mod test {
     use ark_bls12_381::Bls12_381 as P;
     use ark_ed_on_bls12_381::{constraints::EdwardsVar, EdwardsProjective as JubJub, Fq};
 
-    use ark_crypto_primitives::encryption::elgamal::constraints::ElGamalEncGadget;
-    use ark_crypto_primitives::encryption::elgamal::{ElGamal, Randomness};
+    
+    
     use ark_crypto_primitives::encryption::AsymmetricEncryptionScheme;
     use ark_groth16::Groth16;
-    use ark_r1cs_std::prelude::AllocVar;
+    
     use ark_relations::r1cs::{ConstraintSynthesizer, ConstraintSystem};
     use ark_snark::{CircuitSpecificSetupSNARK, SNARK};
 

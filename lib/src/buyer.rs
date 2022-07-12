@@ -3,11 +3,11 @@ use crate::utils::decrypt;
 use anyhow::anyhow;
 use backoff::ExponentialBackoff;
 use ecdsa_fun::adaptor::{Adaptor, EncryptedSignature, HashTranscript};
-use ecdsa_fun::Signature;
-use ethers::prelude::{Address, LocalWallet, H256};
+
+use ethers::prelude::{Address, H256};
 use rand_chacha::ChaCha20Rng;
 use secp256kfun::nonce::Deterministic;
-use secp256kfun::{Point, Scalar};
+use secp256kfun::{Point};
 use sha2::Sha256;
 
 pub struct Buyer<TChainProvider> {

@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use ecdsa_fun::Signature;
 use ethers::prelude::{Address, H256};
-use secp256kfun::{marker::*, Point, Scalar};
+use secp256kfun::{Point};
 
 #[async_trait]
 pub trait ChainProvider {

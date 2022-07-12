@@ -1,9 +1,9 @@
 use crate::traits::ChainProvider;
-use crate::utils::{encrypt, keypair_from_hex, keypair_gen};
+use crate::utils::{encrypt, keypair_gen};
 use anyhow::anyhow;
 use ecdsa_fun::adaptor::{Adaptor, EncryptedSignature, HashTranscript};
 use ethers::prelude::*;
-use ethers::utils::keccak256;
+
 use futures::channel::{mpsc, oneshot};
 use rand_chacha::ChaCha20Rng;
 use secp256kfun::marker::{Mark, Normal};
@@ -12,7 +12,7 @@ use secp256kfun::{g, Point, Scalar, G};
 use sha2::Sha256;
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
-use std::str::FromStr;
+
 
 pub struct Seller<TChainProvider> {
     data: Vec<u8>,

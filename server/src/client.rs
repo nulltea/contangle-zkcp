@@ -1,10 +1,10 @@
-use crate::{InfoResponse, Step1Response, Step3Request};
+use crate::{InfoResponse, Step1Response};
 use anyhow::anyhow;
 use ecdsa_fun::adaptor::EncryptedSignature;
 use ethers::prelude::Address;
 use ethers::types::H256;
 use secp256kfun::Point;
-use serde::Serialize;
+
 use serde_json::json;
 use std::str::FromStr;
 use surf::Url;
@@ -67,6 +67,6 @@ impl SellerClient {
             .await
             .map_err(|e| anyhow!("error requesting step1: {e}"))?;
 
-        H256::from_str(&tx_hash).map_err(|e| anyhow!("error decoding hash"))
+        H256::from_str(&tx_hash).map_err(|_e| anyhow!("error decoding hash"))
     }
 }

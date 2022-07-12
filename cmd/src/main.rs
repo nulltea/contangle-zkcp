@@ -6,19 +6,19 @@ use crate::args::{BuyArgs, CLIArgs, Command, SellArgs, SetupArgs};
 use anyhow::anyhow;
 use async_std::fs;
 use async_std::path::Path;
-use async_std::task::Task;
+
 use chrono;
 use gumdrop::Options;
-use inquire::error::InquireResult;
+
 use inquire::{Confirm, Password, Select, Text};
 use scriptless_zkcp::{
     keypair_from_bip39, keypair_from_hex, keypair_gen, write_to_keystore, Ethereum, LocalWallet,
-    Seller, WEI_IN_ETHER,
+    Seller,
 };
 use scriptless_zkcp::{Buyer, ChainProvider};
 use server::client;
-use std::error::Error;
-use std::ops::Index;
+
+
 use std::process;
 use tokio::spawn;
 use url::Url;

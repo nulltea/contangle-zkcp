@@ -2,12 +2,12 @@ use crate::traits::ChainProvider;
 use anyhow::anyhow;
 use async_trait::async_trait;
 use ethers::prelude::*;
-use ethers::utils::{keccak256, parse_ether, secret_key_to_address};
+use ethers::utils::{keccak256, parse_ether};
 use secp256kfun::{marker::*, Point, Scalar};
 use url::Url;
 
 pub use ethers::utils::WEI_IN_ETHER;
-use k256::{ecdsa::SigningKey, EncodedPoint as K256PublicKey};
+use k256::{EncodedPoint as K256PublicKey};
 
 pub struct Ethereum {
     provider: Provider<Http>,
@@ -74,7 +74,7 @@ impl ChainProvider for Ethereum {
             Ok(None) => {
                 panic!("expected transaction receipt");
             }
-            Err(e) => {
+            Err(_e) => {
                 panic!("fatal error sending tx");
             }
         })
