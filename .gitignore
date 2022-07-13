@@ -12,3 +12,6 @@ Cargo.lock
 .idea
 keys/
 data.json
+
+*.pk
+*.vk

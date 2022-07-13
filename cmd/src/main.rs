@@ -2,7 +2,7 @@
 
 mod args;
 
-use crate::args::{BuyArgs, CLIArgs, Command, SellArgs, SetupArgs};
+use crate::args::{BuyArgs, CLIArgs, Command, CompileArgs, SellArgs, SetupArgs};
 use anyhow::anyhow;
 use async_std::fs;
 use async_std::path::Path;
@@ -13,15 +13,18 @@ use gumdrop::Options;
 use inquire::{Confirm, Password, Select, Text};
 use scriptless_zkcp::{
     keypair_from_bip39, keypair_from_hex, keypair_gen, write_to_keystore, Ethereum, LocalWallet,
-    Seller,
+    Seller, Step1Msg,
 };
 use scriptless_zkcp::{Buyer, ChainProvider};
 use server::client;
 
-
 use std::process;
 use tokio::spawn;
 use url::Url;
+use zkp::{
+    read_verifying_key, write_artifacts_json, Bls12_381, EdwardsVar, EncryptCircuit, Encryption,
+    JubJub, JUB_JUB_PARAMETERS,
+};
 
 const CHAIN_ID: u64 = 31337;
 
@@ -46,6 +49,7 @@ async fn main() -> anyhow::Result<()> {
         Command::Setup(args) => setup(args).await?,
         Command::Sell(args) => sell(args).await?,
         Command::Buy(args) => buy(args).await?,
+        Command::Compile(args) => compile(args).await?,
     }
 
     Ok(())
@@ -103,7 +107,13 @@ async fn sell(args: SellArgs) -> anyhow::Result<()> {
         .parse()
         .map_err(|e| anyhow!("error parsing price: {e}"))?;
 
-    let (seller, to_runtime) = Seller::new(data, price, eth_provider, wallet);
+    let (pk, vk) =
+        Encryption::compile::<Bls12_381, _>(&JUB_JUB_PARAMETERS, &mut rand::thread_rng())?;
+
+    println!("writing artifacts...");
+    write_artifacts_json("./", pk.clone(), vk)?;
+
+    let (seller, to_runtime) = Seller::new(data, price, eth_provider, wallet, pk)?;
 
     spawn(async {
         seller.run().await;
@@ -120,9 +130,11 @@ async fn buy(args: BuyArgs) -> anyhow::Result<()> {
 
     let client = client::SellerClient::new(args.seller_address)?;
     let price = client.price().await?;
-    if !Confirm::new(&format!("Price is {price} ETH. Continue? (y/N): "))
-        .prompt()
-        .unwrap()
+
+    if !args.non_interactive
+        && !Confirm::new(&format!("Price is {price} ETH. Continue? (y/N): "))
+            .prompt()
+            .unwrap()
     {
         return Ok(());
     }
@@ -137,23 +149,35 @@ async fn buy(args: BuyArgs) -> anyhow::Result<()> {
     let address = eth_provider.address_from_pk(wallet.pub_key());
     let pub_key = wallet.pub_key().clone();
 
+    let vk = read_verifying_key(args.encryption_verifying_key_path)?;
+
     let mut buyer = Buyer::new(eth_provider, wallet);
 
-    let (ciphertext, data_pk, buyer_address) = client.step1(address).await?;
+    let Step1Msg {
+        ciphertext,
+        proof_of_encryption,
+        data_pk,
+        seller_address,
+    } = client.step1(address).await?;
+
+    if !buyer.verify_proof_of_encryption(vk, proof_of_encryption, &ciphertext)? {
+        return Err(anyhow!("seller sent invalid proof of encryption"));
+    }
 
     // todo: cache ciphertext, data_pk, buyer_address.
 
-    if !Confirm::new(&format!(
-        "Data cipher text received. Sign transfer transaction to address 0x{address}? (y/N): "
-    ))
-    .prompt()
-    .unwrap()
+    if !args.non_interactive
+        && !Confirm::new(&format!(
+            "Data cipher text received. Sign transfer transaction to address 0x{address}? (y/N): "
+        ))
+        .prompt()
+        .unwrap()
     {
         return Ok(());
     }
 
     let enc_sig = buyer
-        .step2(&ciphertext, &data_pk, buyer_address, price)
+        .step2(&ciphertext, &data_pk, seller_address, price)
         .await?;
 
     let tx_hash = client.step3(pub_key, enc_sig).await?;
@@ -173,5 +197,17 @@ async fn buy(args: BuyArgs) -> anyhow::Result<()> {
         .await
         .map_err(|e| anyhow!("error writing decrypted data: {e}"))?;
 
+    Ok(())
+}
+
+async fn compile(args: CompileArgs) -> anyhow::Result<()> {
+    println!("compiling circuit...");
+    let (pk, vk) =
+        Encryption::compile::<Bls12_381, _>(&JUB_JUB_PARAMETERS, &mut rand::thread_rng())?;
+
+    println!("writing artifacts...");
+    write_artifacts_json(args.output_dir, pk, vk)?;
+
+    println!("done!");
     Ok(())
 }
