@@ -1,9 +1,9 @@
 #![feature(inherent_associated_types)]
 extern crate core;
 
-mod elgamal;
 mod encryption;
 mod parameters;
+mod poseidon;
 mod utils;
 
 pub use crate::encryption::*;

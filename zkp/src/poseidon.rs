@@ -1,4 +1,3 @@
-use crate::elgamal::parameters::P1;
 use crate::parameters::*;
 use ark_bls12_377::Fq;
 use ark_sponge::poseidon::PoseidonParameters;

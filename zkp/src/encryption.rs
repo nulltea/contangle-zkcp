@@ -1,13 +1,4 @@
-use crate::elgamal::constraints::{
-    HashElGamalEncGadget, OutputVar, ParametersVar, PlaintextVar, PublicKeyVar, RandomnessVar,
-};
-use crate::elgamal::{
-    Ciphertext, HashElGamal, Parameters, Plaintext, PublicKey, Randomness, SecretKey,
-};
-use crate::JUB_JUB_PARAMETERS;
 use anyhow::anyhow;
-use ark_crypto_primitives::encryption::elgamal::constraints::{ConstraintF, ElGamalEncGadget};
-use ark_crypto_primitives::encryption::{AsymmetricEncryptionGadget, AsymmetricEncryptionScheme};
 use ark_crypto_primitives::snark::NonNativeFieldInputVar;
 use ark_crypto_primitives::Error;
 use ark_ec::{PairingEngine, ProjectiveCurve};
@@ -23,8 +14,9 @@ use ark_relations::r1cs::{
 };
 use ark_snark::{CircuitSpecificSetupSNARK, SNARK};
 use ark_sponge::constraints::{AbsorbGadget, CryptographicSpongeVar};
-use ark_sponge::poseidon::PoseidonParameters;
-use ark_sponge::{Absorb, CryptographicSponge};
+use ark_sponge::poseidon::constraints::PoseidonSpongeVar;
+use ark_sponge::poseidon::{PoseidonParameters, PoseidonSponge};
+use ark_sponge::{Absorb, CryptographicSponge, FieldBasedCryptographicSponge};
 use ark_std::marker::PhantomData;
 use ark_std::rand::{CryptoRng, Rng, RngCore};
 use ark_std::vec::Vec;
@@ -45,13 +37,38 @@ where
     _curve_var: PhantomData<CV>,
 }
 
+#[derive(Clone, Debug)]
+pub struct Parameters<C: ProjectiveCurve>
+where
+    <C as ProjectiveCurve>::BaseField: PrimeField,
+{
+    pub generator: C,
+    pub poseidon: PoseidonParameters<C::BaseField>,
+}
+
+pub type PublicKey<C> = C;
+
+pub struct SecretKey<C: ProjectiveCurve>(pub C::ScalarField);
+
+pub struct Randomness<C: ProjectiveCurve>(pub C::ScalarField);
+
+impl<C: ProjectiveCurve> UniformRand for Randomness<C> {
+    #[inline]
+    fn rand<R: Rng + ?Sized>(rng: &mut R) -> Self {
+        Randomness(<C as ProjectiveCurve>::ScalarField::rand(rng))
+    }
+}
+
+pub type Plaintext<C> = <C as ProjectiveCurve>::ScalarField;
+
+pub type Ciphertext<C> = (C, <C as ProjectiveCurve>::ScalarField);
+
 impl<C, CV> EncryptCircuit<C, CV>
 where
     C: ProjectiveCurve,
     C::BaseField: PrimeField,
     C::Affine: Absorb,
-    CV: CurveVar<C, ConstraintF<C>>,
-    for<'a> &'a CV: GroupOpsBounds<'a, C, CV>,
+    CV: CurveVar<C, C::BaseField> + AbsorbGadget<C::BaseField>,
 {
     pub fn new<R: Rng>(
         pk: PublicKey<C>,
@@ -70,7 +87,7 @@ where
         //     .iter()
         //     .map(|msg| ElGamal::<C>::encrypt(&params, &pk, msg, &r))
         //     .collect();
-        let enc = HashElGamal::<C>::encrypt(&params, &pk, &msg, &r)?;
+        let enc = Self::encrypt(&pk, &msg, &r, &params)?;
 
         Ok(Self {
             r,
@@ -99,12 +116,17 @@ where
     }
 
     pub fn keygen<R: CryptoRng + RngCore>(
-        params: &'static Parameters<C>,
+        params: &Parameters<C>,
         mut rng: &mut R,
     ) -> anyhow::Result<(SecretKey<C>, PublicKey<C>)> {
-        let (pk, sk) = HashElGamal::<C>::keygen(params, rng)
-            .map_err(|e| anyhow!("error generating ElGamal keypair: {e}"))?;
-        Ok((sk, pk))
+        // get a random element from the scalar field
+        let secret_key = C::ScalarField::rand(rng);
+
+        // compute secret_key*generator to derive the public key
+        let mut public_key = params.generator;
+        public_key.mul_assign(secret_key.clone());
+
+        Ok((SecretKey(secret_key), public_key))
     }
 
     pub fn verify_proof<E: PairingEngine>(
@@ -129,16 +151,49 @@ where
             .map_err(|e| anyhow!("error verifying proof: {e}"))
     }
 
+    fn encrypt(
+        pk: &PublicKey<C>,
+        msg: &Plaintext<C>,
+        r: &Randomness<C>,
+        params: &Parameters<C>,
+    ) -> Result<Ciphertext<C>, Error> {
+        let mut c1 = params.generator.clone();
+        c1.mul_assign(r.0.clone());
+
+        let mut p_r = pk.clone();
+        p_r.mul_assign(r.0.clone());
+        let p_ra = p_r.into_affine();
+
+        let mut sponge = PoseidonSponge::new(&params.poseidon);
+        sponge.absorb(&p_ra);
+        let dh = sponge.squeeze_field_elements::<C::ScalarField>(1)[0];
+        let c2 = dh + msg;
+        Ok((c1, c2))
+    }
+
     pub fn decrypt<E: PairingEngine>(
         cipher: Ciphertext<C>,
-        sk: C::ScalarField,
+        sk: SecretKey<C>,
         params: &Parameters<C>,
     ) -> anyhow::Result<Plaintext<C>>
     where
         C::Affine: ToConstraintField<E::Fr>,
     {
-        HashElGamal::<C>::decrypt(params, &SecretKey(sk), &cipher)
-            .map_err(|e| anyhow!("error decrypting ciphertext: {e}"))
+        let c1 = cipher.0;
+        let c2 = cipher.1;
+
+        // compute s = c1^secret_key
+        let mut s = c1;
+        s.mul_assign(sk.0);
+        let sa = s.into_affine();
+
+        // compute dh = H(s)
+        let mut sponge = PoseidonSponge::new(&params.poseidon);
+        sponge.absorb(&sa);
+        let dh = sponge.squeeze_field_elements::<C::ScalarField>(1)[0];
+
+        // compute message = c2 - s
+        Ok(c2 - dh)
     }
 
     pub fn prove<E: PairingEngine, R>(
@@ -156,6 +211,63 @@ where
 
         Ok((ciphertext, proof))
     }
+
+    pub(crate) fn verify_encryption(
+        &self,
+        cs: ConstraintSystemRef<C::BaseField>,
+        msg: &NonNativeFieldVar<C::ScalarField, C::BaseField>,
+        ciphertext: &(CV, NonNativeFieldVar<C::ScalarField, C::BaseField>),
+    ) -> Result<(), SynthesisError> {
+        let g = CV::new_constant(
+            ark_relations::ns!(cs, "elgamal_generator"),
+            C::prime_subgroup_generator(),
+        )?;
+
+        // flatten randomness to little-endian bit vector
+        let r = to_bytes![&self.r.0].unwrap();
+        let randomness = UInt8::new_witness_vec(ark_relations::ns!(cs, "elgamal_randomness"), &r)?
+            .iter()
+            .flat_map(|b| b.to_bits_le().unwrap())
+            .collect::<Vec<_>>();
+
+        let pk = CV::new_witness(ark_relations::ns!(cs, "elgamal_pubkey"), || {
+            Ok(self.pk.clone())
+        })?;
+
+        // compute s = randomness*pk
+        let s = pk.clone().scalar_mul_le(randomness.iter())?;
+
+        // compute c1 = randomness*generator
+        let c1 = g.clone().scalar_mul_le(randomness.iter())?;
+
+        let mut poseidon = PoseidonSpongeVar::new(cs.clone(), &self.params.poseidon);
+        poseidon.absorb(&s)?;
+        let c2 = poseidon
+            .squeeze_nonnative_field_elements::<C::ScalarField>(1)
+            .and_then(|r| Ok(r.0[0].clone() + msg))?;
+
+        c1.enforce_equal(&ciphertext.0)
+            .and(c2.enforce_equal(&ciphertext.1))
+    }
+
+    pub(crate) fn ciphertext_var(
+        &self,
+        cs: ConstraintSystemRef<C::BaseField>,
+        mode: AllocationMode,
+    ) -> Result<(CV, NonNativeFieldVar<C::ScalarField, C::BaseField>), SynthesisError> {
+        let c1 = CV::new_variable(
+            ark_relations::ns!(cs, "elgamal_enc"),
+            || Ok(self.enc.0),
+            mode,
+        )?;
+        let c2 = NonNativeFieldVar::<C::ScalarField, C::BaseField>::new_variable(
+            ark_relations::ns!(cs, "elgamal_enc"),
+            || Ok(self.enc.1),
+            mode,
+        )?;
+
+        Ok((c1, c2))
+    }
 }
 
 impl<C, CV> ConstraintSynthesizer<C::BaseField> for EncryptCircuit<C, CV>
@@ -163,59 +275,26 @@ where
     C: ProjectiveCurve,
     C::BaseField: PrimeField,
     C::Affine: Absorb,
-    CV: CurveVar<C, ConstraintF<C>> + AbsorbGadget<ConstraintF<C>>,
-    for<'a> &'a CV: GroupOpsBounds<'a, C, CV>,
+    CV: CurveVar<C, C::BaseField> + AbsorbGadget<C::BaseField>,
 {
     fn generate_constraints(
         self,
         cs: ConstraintSystemRef<C::BaseField>,
     ) -> Result<(), SynthesisError> {
-        let randomness_var = RandomnessVar::<C::BaseField>::new_witness(
-            ark_relations::ns!(cs, "gadget_randomness"),
-            || Ok(&self.r),
-        )
-        .unwrap();
-        let parameters_var = ParametersVar::<C, CV>::new_constant(
-            ark_relations::ns!(cs, "gadget_parameters"),
-            &self.params,
-        )
-        .unwrap();
-        let msg_var =
-            PlaintextVar::<C>::new_witness(ark_relations::ns!(cs, "gadget_message"), || {
-                Ok(&self.msg)
-            })
-            .unwrap();
-        let pk_var =
-            PublicKeyVar::<C, CV>::new_witness(ark_relations::ns!(cs, "gadget_public_key"), || {
-                Ok(&self.pk)
-            })
-            .unwrap();
+        let message = NonNativeFieldVar::<C::ScalarField, C::BaseField>::new_witness(
+            ark_relations::ns!(cs, "share_nonnative"),
+            || Ok(self.msg),
+        )?;
+        let ciphertext = self.ciphertext_var(cs.clone(), AllocationMode::Input)?;
 
-        // use gadget
-        let result_var = HashElGamalEncGadget::<C, CV>::encrypt(
-            cs.clone(),
-            &parameters_var,
-            &msg_var,
-            &randomness_var,
-            &pk_var,
-        )
-        .unwrap();
-
-        // check that result equals expected ciphertext in the constraint system
-        let expected_var =
-            OutputVar::<C, CV>::new_input(ark_relations::ns!(cs, "gadget_expected"), || {
-                Ok(&self.enc)
-            })
-            .unwrap();
-
-        expected_var.enforce_equal(&result_var)
+        self.verify_encryption(cs.clone(), &message, &ciphertext)
     }
 }
 
 #[cfg(test)]
 mod test {
-    use crate::elgamal::{poseidon, HashElGamal, Parameters};
-    use crate::{ark_to_bytes, EncryptCircuit, JUB_JUB_PARAMETERS};
+    use crate::{ark_to_bytes, EncryptCircuit};
+    use crate::{poseidon, Parameters};
     use ark_bls12_377::{constraints::G1Var, Bls12_377, Fq, Fr, FrParameters, G1Projective};
     use ark_bw6_761::BW6_761 as P;
     use ark_crypto_primitives::encryption::elgamal::ElGamal;
@@ -245,7 +324,7 @@ mod test {
             poseidon: poseidon::get_bls12377_fq_params(2),
         };
 
-        let (pub_key, _) = HashElGamal::<G1Projective>::keygen(&params, &mut rng).unwrap();
+        let (_, pub_key) = TestEnc::keygen(&params, &mut rng).unwrap();
 
         let circuit = TestEnc::new(
             pub_key.clone(),
