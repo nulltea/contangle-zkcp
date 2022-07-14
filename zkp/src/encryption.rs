@@ -2,13 +2,14 @@ use anyhow::anyhow;
 use ark_crypto_primitives::snark::NonNativeFieldInputVar;
 use ark_crypto_primitives::Error;
 use ark_ec::{PairingEngine, ProjectiveCurve};
-use ark_ff::{to_bytes, BitIteratorLE, Field, PrimeField, ToConstraintField};
+use ark_ff::{to_bytes, BigInteger, BitIteratorLE, Field, PrimeField, ToConstraintField};
 use ark_groth16::{Groth16, Proof, ProvingKey, VerifyingKey};
 use ark_nonnative_field::NonNativeFieldVar;
 use ark_r1cs_std::fields::fp::FpVar;
 use ark_r1cs_std::groups::CurveVar;
 use ark_r1cs_std::prelude::*;
 use ark_r1cs_std::ToConstraintFieldGadget;
+use ark_relations::ns;
 use ark_relations::r1cs::{
     ConstraintSynthesizer, ConstraintSystem, ConstraintSystemRef, SynthesisError,
 };
@@ -68,6 +69,7 @@ where
     C: ProjectiveCurve,
     C::BaseField: PrimeField,
     C::Affine: Absorb,
+    C::BaseField: Absorb,
     CV: CurveVar<C, C::BaseField> + AbsorbGadget<C::BaseField>,
 {
     pub fn new<R: Rng>(
@@ -133,20 +135,13 @@ where
         vk: &VerifyingKey<E>,
         proof: Proof<E>,
         cipher: Ciphertext<C>,
+        params: &Parameters<C>,
     ) -> anyhow::Result<bool>
     where
-        C::Affine: ToConstraintField<E::Fr>,
+        C::BaseField: ToConstraintField<E::Fr>,
     {
-        let cs = ConstraintSystem::<<C as ProjectiveCurve>::BaseField>::new_ref();
-        let mut public_inputs = cipher.0.into_affine().to_field_elements().unwrap();
-        // let x = NonNativeFieldVar::new_input(ark_relations::ns!(cs, ""), || Ok(cipher.1)).unwrap();
-        // let cipher_fields: Vec<<E as PairingEngine>::Fr> = x
-        //     .to_constraint_field()
-        //     .unwrap()
-        //     .into_iter()
-        //     .flat_map(|c| c.to_field_elements())
-        //     .collect();
-        // public_inputs.extend(cipher_fields.into_iter());
+        let commit = Self::commit_to_inputs(&cipher, &params);
+        let public_inputs = commit.to_field_elements().unwrap();
         Groth16::<E>::verify(&vk, &public_inputs, &proof)
             .map_err(|e| anyhow!("error verifying proof: {e}"))
     }
@@ -218,21 +213,16 @@ where
         msg: &NonNativeFieldVar<C::ScalarField, C::BaseField>,
         ciphertext: &(CV, NonNativeFieldVar<C::ScalarField, C::BaseField>),
     ) -> Result<(), SynthesisError> {
-        let g = CV::new_constant(
-            ark_relations::ns!(cs, "elgamal_generator"),
-            C::prime_subgroup_generator(),
-        )?;
+        let g = CV::new_constant(ns!(cs, "elgamal_generator"), C::prime_subgroup_generator())?;
 
         // flatten randomness to little-endian bit vector
         let r = to_bytes![&self.r.0].unwrap();
-        let randomness = UInt8::new_witness_vec(ark_relations::ns!(cs, "elgamal_randomness"), &r)?
+        let randomness = UInt8::new_witness_vec(ns!(cs, "elgamal_randomness"), &r)?
             .iter()
             .flat_map(|b| b.to_bits_le().unwrap())
             .collect::<Vec<_>>();
 
-        let pk = CV::new_witness(ark_relations::ns!(cs, "elgamal_pubkey"), || {
-            Ok(self.pk.clone())
-        })?;
+        let pk = CV::new_witness(ns!(cs, "elgamal_pubkey"), || Ok(self.pk.clone()))?;
 
         // compute s = randomness*pk
         let s = pk.clone().scalar_mul_le(randomness.iter())?;
@@ -255,18 +245,74 @@ where
         cs: ConstraintSystemRef<C::BaseField>,
         mode: AllocationMode,
     ) -> Result<(CV, NonNativeFieldVar<C::ScalarField, C::BaseField>), SynthesisError> {
-        let c1 = CV::new_variable(
-            ark_relations::ns!(cs, "elgamal_enc"),
-            || Ok(self.enc.0),
-            mode,
-        )?;
+        let c1 = CV::new_variable(ns!(cs, "elgamal_enc"), || Ok(self.enc.0), mode)?;
         let c2 = NonNativeFieldVar::<C::ScalarField, C::BaseField>::new_variable(
-            ark_relations::ns!(cs, "elgamal_enc"),
+            ns!(cs, "elgamal_enc"),
             || Ok(self.enc.1),
             mode,
         )?;
 
         Ok((c1, c2))
+    }
+
+    pub fn constraint_inputs(
+        &self,
+        cs: ConstraintSystemRef<C::BaseField>,
+        ciphertext: &(CV, NonNativeFieldVar<C::ScalarField, C::BaseField>),
+    ) -> Result<(), SynthesisError> {
+        // input commitment
+        let ciphertext_commitment_var = FpVar::<C::BaseField>::new_variable(
+            ns!(cs, "ciphertext_commitment"),
+            || Ok(Self::commit_to_inputs(&self.enc, &self.params)),
+            AllocationMode::Input,
+        )?;
+
+        let mut sponge = PoseidonSpongeVar::new(cs.clone(), &self.params.poseidon);
+        sponge.absorb(&ciphertext.0)?;
+
+        let native = self.enc.1;
+        let nonnative = &ciphertext.1;
+        let scalar_in_fq = &C::BaseField::from_repr(
+            <C::BaseField as PrimeField>::BigInt::from_bits_le(&native.into_repr().to_bits_le()),
+        )
+        .unwrap(); // because Fr < Fq
+        let scalar_var = FpVar::new_witness(ns!(cs.clone(), "scalar fq"), || Ok(scalar_in_fq))?;
+        sponge.absorb(&scalar_var)?;
+        // Pass from Fq(Fp) -> Bits<Fq)[0..Fp]
+        let native_bits = scalar_var.to_bits_le()?;
+        let nonnative_bits = nonnative.to_bits_le()?;
+        for (fq_base, nonnative_base) in native_bits
+            .iter()
+            .zip(nonnative_bits.iter())
+            .take(C::ScalarField::size_in_bits())
+        {
+            fq_base.enforce_equal(nonnative_base)?;
+        }
+        // enforce the rest is 0 so there is no different witness possible
+        // for the Fq(Fp) var
+        let diff = native_bits.len() - C::ScalarField::size_in_bits();
+        let false_var = Boolean::constant(false);
+        for unconstrained_bit in native_bits.iter().rev().take(diff) {
+            unconstrained_bit.enforce_equal(&false_var)?;
+        }
+
+        let exp = sponge
+            .squeeze_field_elements(1)
+            .and_then(|mut v| Ok(v.remove(0)))?;
+
+        exp.enforce_equal(&ciphertext_commitment_var)
+    }
+
+    pub fn commit_to_inputs(ciphertext: &Ciphertext<C>, params: &Parameters<C>) -> C::BaseField {
+        let mut sponge = PoseidonSponge::new(&params.poseidon);
+        sponge.absorb(&ciphertext.0.into_affine());
+        let scalar_in_fq =
+            &C::BaseField::from_repr(<C::BaseField as PrimeField>::BigInt::from_bits_le(
+                &ciphertext.1.into_repr().to_bits_le(),
+            ))
+            .unwrap();
+        sponge.absorb(&scalar_in_fq);
+        sponge.squeeze_field_elements(1).remove(0)
     }
 }
 
@@ -275,6 +321,7 @@ where
     C: ProjectiveCurve,
     C::BaseField: PrimeField,
     C::Affine: Absorb,
+    C::BaseField: Absorb,
     CV: CurveVar<C, C::BaseField> + AbsorbGadget<C::BaseField>,
 {
     fn generate_constraints(
@@ -282,11 +329,12 @@ where
         cs: ConstraintSystemRef<C::BaseField>,
     ) -> Result<(), SynthesisError> {
         let message = NonNativeFieldVar::<C::ScalarField, C::BaseField>::new_witness(
-            ark_relations::ns!(cs, "share_nonnative"),
+            ns!(cs, "share_nonnative"),
             || Ok(self.msg),
         )?;
-        let ciphertext = self.ciphertext_var(cs.clone(), AllocationMode::Input)?;
+        let ciphertext = self.ciphertext_var(cs.clone(), AllocationMode::Witness)?;
 
+        self.constraint_inputs(cs.clone(), &ciphertext)?;
         self.verify_encryption(cs.clone(), &message, &ciphertext)
     }
 }
@@ -357,7 +405,7 @@ mod test {
         let enc = circuit.enc.clone();
         let proof = Groth16::prove(&pk, circuit, &mut rng).unwrap();
 
-        let valid_proof = TestEnc::verify_proof(&vk, proof, enc).unwrap();
+        let valid_proof = TestEnc::verify_proof(&vk, proof, enc, &params).unwrap();
         assert!(valid_proof);
     }
 
