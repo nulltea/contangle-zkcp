@@ -1,8 +1,6 @@
 use crate::traits::ChainProvider;
 
-use crate::{
-    keypair_from_bytes, CircuitParams, Encryption, PairingEngine, ProjectiveCurve,
-};
+use crate::{keypair_from_bytes, Encryption, PairingEngine, ProjectiveCurve, ENC_PARAMS};
 use anyhow::anyhow;
 use ecdsa_fun::adaptor::{Adaptor, EncryptedSignature, HashTranscript};
 use ethers::prelude::*;
@@ -16,12 +14,7 @@ use sha2::Sha256;
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 
-
-use zkp::{
-    ark_to_bytes, bytes_to_plaintext_chunks,
-    ciphertext_to_bytes,
-    ProvingKey,
-};
+use zkp::{ark_to_bytes, bytes_to_plaintext_chunks, ProvingKey};
 
 pub struct Seller<TChainProvider> {
     data: Vec<u8>,
@@ -146,7 +139,7 @@ impl<TChainProvider: ChainProvider> Seller<TChainProvider> {
     ) -> anyhow::Result<(zkp::PublicKey<ProjectiveCurve>, Scalar, Point)> {
         loop {
             let (elgamal_sk, elgamal_pk) =
-                Encryption::keygen(&CircuitParams, &mut rand::thread_rng())?;
+                Encryption::keygen(&ENC_PARAMS, &mut rand::thread_rng())?;
 
             let elgamal_sk_bytes = ark_to_bytes(elgamal_sk)
                 .map_err(|e| anyhow!("error encoding elgamal secret key: {e}"))?;
@@ -167,13 +160,11 @@ impl<TChainProvider: ChainProvider> Seller<TChainProvider> {
         let mut msg = bytes_to_plaintext_chunks::<ProjectiveCurve, _>(&plaintext)
             .map_err(|e| anyhow!("error casting plaintext: {e}"))?;
 
-        let msg = msg.remove(0);
-
-        let encrypt = Encryption::new(pk, msg, &CircuitParams, rng)
+        let encrypt = Encryption::new(pk, msg, &ENC_PARAMS, rng)
             .map_err(|e| anyhow!("error encrypting data: {e}"))?;
         let (ciphertext, proof) = encrypt.prove(&self.circuit_pk, &mut rng)?;
 
-        let ciphertext_encoded = ciphertext_to_bytes::<ProjectiveCurve>(ciphertext.clone())
+        let ciphertext_encoded = ark_to_bytes(ciphertext.clone())
             .map_err(|e| anyhow!("error encoding ciphertext: {e}"))?;
 
         let proof_encoded = ark_to_bytes(proof)?;

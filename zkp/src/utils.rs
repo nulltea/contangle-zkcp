@@ -55,7 +55,7 @@ pub fn ark_to_bytes<I: CanonicalSerialize>(f: I) -> Result<Vec<u8>, Serializatio
 
 pub fn bytes_to_plaintext_chunks<C: ProjectiveCurve, B: AsRef<[u8]>>(
     bytes: B,
-) -> anyhow::Result<Vec<Plaintext<C>>> {
+) -> anyhow::Result<Plaintext<C>> {
     let mut reader = BufReader::new(bytes.as_ref());
 
     let mut chunks = vec![];
@@ -80,7 +80,7 @@ pub fn bytes_to_plaintext_chunks<C: ProjectiveCurve, B: AsRef<[u8]>>(
 }
 
 pub fn plaintext_chunks_to_bytes<C: ProjectiveCurve>(
-    chunks: Vec<Plaintext<C>>,
+    chunks: Plaintext<C>,
 ) -> anyhow::Result<Vec<u8>> {
     let mut buf = vec![0; chunks.len() * 32];
     let mut writer = BufWriter::new(&mut *buf);
@@ -102,46 +102,11 @@ pub fn plaintext_chunks_to_bytes<C: ProjectiveCurve>(
     Ok(writer.buffer().to_vec())
 }
 
-pub fn ciphertext_to_bytes<C: ProjectiveCurve>(
-    ciphertext: Ciphertext<C>,
-) -> anyhow::Result<Vec<u8>> {
-    let c1_bytes = ark_to_bytes(ciphertext.0.into_affine())
-        .map_err(|e| anyhow!("error encoding ciphertext.c1"))?;
-    let c2_bytes =
-        ark_to_bytes(ciphertext.1).map_err(|e| anyhow!("error encoding ciphertext.c2"))?;
-
-    Ok(c1_bytes
-        .into_iter()
-        .chain(c2_bytes.into_iter())
-        .collect::<Vec<_>>())
-}
-
-pub fn ciphertext_from_bytes<C: ProjectiveCurve, B: AsRef<[u8]>>(
-    bytes: B,
-) -> anyhow::Result<Ciphertext<C>> {
-    let mut reader = BufReader::new(bytes.as_ref());
-    let mut buf = vec![0; 48];
-    reader
-        .read(&mut buf)
-        .map_err(|e| anyhow!("error reader buffer: {e}"))?;
-
-    let c1: C::Affine = ark_from_bytes(buf).map_err(|e| anyhow!("error decoding ciphertext.c1"))?;
-
-    let mut buf = vec![0; 32];
-    reader
-        .read(&mut buf)
-        .map_err(|e| anyhow!("error reader buffer: {e}"))?;
-    let c2: C::BaseField =
-        ark_from_bytes(buf).map_err(|e| anyhow!("error decoding ciphertext.c2"))?;
-
-    Ok((c1.into_projective(), c2))
-}
-
 #[cfg(test)]
 mod test {
     use crate::{
-        ark_from_bytes, ark_to_bytes, bytes_to_plaintext_chunks, ciphertext_from_bytes,
-        ciphertext_to_bytes, plaintext_chunks_to_bytes, Ciphertext, JubJub, JubJubParams,
+        ark_from_bytes, ark_to_bytes, bytes_to_plaintext_chunks, plaintext_chunks_to_bytes,
+        Ciphertext, JubJub,
     };
     use ark_bls12_381::Fr;
     use ark_crypto_primitives::encryption::elgamal::{Plaintext, PublicKey};
@@ -195,9 +160,9 @@ mod test {
         let mut bytes = [0; 32];
         rng.fill_bytes(&mut bytes);
         let c2 = Fq::from_random_bytes(&bytes).unwrap();
-        let ciphertext: Ciphertext<JubJub> = (JubJub::prime_subgroup_generator(), c2);
+        let ciphertext: Ciphertext<JubJub> = (JubJub::prime_subgroup_generator(), vec![c2]);
 
-        let cipher = ark_to_bytes(ciphertext).unwrap();
+        let cipher = ark_to_bytes(ciphertext.clone()).unwrap();
         let decoded: Ciphertext<JubJub> = ark_from_bytes(&cipher).unwrap();
 
         assert_eq!(ciphertext, decoded)

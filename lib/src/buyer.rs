@@ -3,8 +3,7 @@ use anyhow::anyhow;
 use backoff::ExponentialBackoff;
 use ecdsa_fun::adaptor::{Adaptor, EncryptedSignature, HashTranscript};
 
-
-use crate::{CircuitParams, Encryption, PairingEngine, ProjectiveCurve};
+use crate::{Encryption, PairingEngine, ProjectiveCurve, ENC_PARAMS};
 use ethers::prelude::{Address, H256};
 use rand_chacha::ChaCha20Rng;
 use secp256kfun::nonce::Deterministic;
@@ -50,7 +49,7 @@ impl<TChainProvider: ChainProvider> Buyer<TChainProvider> {
             &vk,
             proof_of_encryption,
             ciphertext_var,
-            &CircuitParams,
+            &ENC_PARAMS,
         )
     }
 
@@ -110,7 +109,7 @@ pub fn decrypt(sk: &Scalar, ciphertext: &[u8]) -> anyhow::Result<Vec<u8>> {
         ark_from_bytes(sk.to_bytes()).map_err(|e| anyhow!("error casting secret key: {e}"))?;
     let ciphertext =
         ark_from_bytes(ciphertext).map_err(|e| anyhow!("error casting ciphertext: {e}"))?;
-    let plaintext = Encryption::decrypt(ciphertext, sk, &CircuitParams)?;
-    plaintext_chunks_to_bytes::<ProjectiveCurve>(vec![plaintext])
+    let plaintext = Encryption::decrypt(ciphertext, sk, &ENC_PARAMS)?;
+    plaintext_chunks_to_bytes::<ProjectiveCurve>(plaintext)
         .map_err(|e| anyhow!("error casting plaintext: {e}"))
 }

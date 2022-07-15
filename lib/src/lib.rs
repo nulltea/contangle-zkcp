@@ -9,17 +9,27 @@ mod wallet;
 
 pub use buyer::*;
 pub use ethereum::*;
+use lazy_static::lazy_static;
 pub use seller::*;
 pub use traits::*;
 pub use utils::*;
 pub use wallet::*;
 
-pub use zkp::{
-    Bls12_381 as PairingEngine, JubJub as ProjectiveCurve, JubJubParams as CircuitParams,
-    JubJubVar as CurveVar,
-};
+pub use zkp::{Bls12_381 as PairingEngine, JubJub as ProjectiveCurve, JubJubVar as CurveVar};
 
 pub type Encryption = zkp::EncryptCircuit<ProjectiveCurve, CurveVar>;
+
+use zkp::{poseidon, Parameters};
+lazy_static! {
+    pub static ref ENC_PARAMS: Parameters<ProjectiveCurve> = Parameters::<ProjectiveCurve> {
+        n: 1,
+        poseidon: poseidon::get_poseidon_params::<ProjectiveCurve>(2),
+    };
+    pub static ref MULTI_ENC_PARAMS: Parameters<ProjectiveCurve> = Parameters::<ProjectiveCurve> {
+        n: 100,
+        poseidon: poseidon::get_poseidon_params::<ProjectiveCurve>(2),
+    };
+}
 
 #[cfg(test)]
 mod tests {
