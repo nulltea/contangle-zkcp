@@ -23,7 +23,7 @@ ark-bls12-381 = { version = "^0.3.0" }
 ark-bls12-377 = { version = "^0.3.0", features = ["r1cs","curve"] }
 ark-bw6-761 = { version = "^0.3.0" }
 
-derivative = { version = "2.0", features = ["use_core"] }
+pretty_env_logger = "0.4.0"
 
 json = "0.12.4"
 lazy_static = "^1.4.0"
