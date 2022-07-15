@@ -4,14 +4,13 @@ use backoff::ExponentialBackoff;
 use ecdsa_fun::adaptor::{Adaptor, EncryptedSignature, HashTranscript};
 use std::path::Path;
 
+use crate::{CircuitParams, Encryption, PairingEngine, ProjectiveCurve};
 use ethers::prelude::{Address, H256};
 use rand_chacha::ChaCha20Rng;
 use secp256kfun::nonce::Deterministic;
 use secp256kfun::{Point, Scalar};
 use sha2::Sha256;
-use zkp::{
-    ark_from_bytes, ark_to_bytes, Bls12_381, Encryption, JubJub, VerifyingKey, JUB_JUB_PARAMETERS,
-};
+use zkp::{ark_from_bytes, ark_to_bytes, plaintext_chunks_to_bytes, SecretKey, VerifyingKey};
 
 pub struct Buyer<TChainProvider> {
     chain: TChainProvider,
@@ -39,15 +38,20 @@ impl<TChainProvider: ChainProvider> Buyer<TChainProvider> {
 
     pub fn verify_proof_of_encryption(
         &self,
-        vk: VerifyingKey<Bls12_381>,
+        vk: VerifyingKey<PairingEngine>,
         proof: Vec<u8>,
         ciphertext: &[u8],
     ) -> anyhow::Result<bool> {
         let proof_of_encryption = ark_from_bytes(proof)?;
-        let ciphertext_affine =
+        let ciphertext_var =
             ark_from_bytes(&ciphertext).map_err(|e| anyhow!("error casting ciphertext"))?;
 
-        Encryption::verify_proof::<Bls12_381>(&vk, proof_of_encryption, ciphertext_affine)
+        Encryption::verify_proof::<PairingEngine>(
+            &vk,
+            proof_of_encryption,
+            ciphertext_var,
+            &CircuitParams,
+        )
     }
 
     /// Step 2: Bob signs a transaction to transfer coins to Alice address
@@ -102,9 +106,11 @@ impl<TChainProvider: ChainProvider> Buyer<TChainProvider> {
 }
 
 pub fn decrypt(sk: &Scalar, ciphertext: &[u8]) -> anyhow::Result<Vec<u8>> {
-    let sk = ark_from_bytes(sk.to_bytes()).map_err(|e| anyhow!("error casting secret key: {e}"))?;
+    let sk: SecretKey<ProjectiveCurve> =
+        ark_from_bytes(sk.to_bytes()).map_err(|e| anyhow!("error casting secret key: {e}"))?;
     let ciphertext =
         ark_from_bytes(ciphertext).map_err(|e| anyhow!("error casting ciphertext: {e}"))?;
-    let plaintext = Encryption::decrypt::<Bls12_381>(ciphertext, sk, &JUB_JUB_PARAMETERS)?;
-    ark_to_bytes(plaintext).map_err(|e| anyhow!("error casting plaintext: {e}"))
+    let plaintext = Encryption::decrypt(ciphertext, sk, &CircuitParams)?;
+    plaintext_chunks_to_bytes::<ProjectiveCurve>(vec![plaintext])
+        .map_err(|e| anyhow!("error casting plaintext: {e}"))
 }

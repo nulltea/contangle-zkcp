@@ -43,13 +43,12 @@ pub struct Parameters<C: ProjectiveCurve>
 where
     <C as ProjectiveCurve>::BaseField: PrimeField,
 {
-    pub generator: C,
     pub poseidon: PoseidonParameters<C::BaseField>,
 }
 
 pub type PublicKey<C> = C;
 
-pub struct SecretKey<C: ProjectiveCurve>(pub C::ScalarField);
+pub type SecretKey<C: ProjectiveCurve> = C::ScalarField;
 
 pub struct Randomness<C: ProjectiveCurve>(pub C::ScalarField);
 
@@ -75,14 +74,13 @@ where
     pub fn new<R: Rng>(
         pk: PublicKey<C>,
         msg: Plaintext<C>,
-        params: PoseidonParameters<C::BaseField>,
+        params: &Parameters<C>,
         rng: &mut R,
     ) -> Result<Self, Error> {
         let r = Randomness::rand(rng);
 
         let params = Parameters::<C> {
-            generator: C::prime_subgroup_generator(),
-            poseidon: params,
+            poseidon: params.poseidon.clone(),
         };
 
         // let enc: Result<Vec<_>, Error> = msg
@@ -102,7 +100,7 @@ where
     }
 
     pub fn compile<E: PairingEngine, R>(
-        params: PoseidonParameters<C::BaseField>,
+        params: &Parameters<C>,
         mut rng: &mut R,
     ) -> anyhow::Result<(ProvingKey<E>, VerifyingKey<E>)>
     where
@@ -125,10 +123,10 @@ where
         let secret_key = C::ScalarField::rand(rng);
 
         // compute secret_key*generator to derive the public key
-        let mut public_key = params.generator;
+        let mut public_key = C::prime_subgroup_generator();
         public_key.mul_assign(secret_key.clone());
 
-        Ok((SecretKey(secret_key), public_key))
+        Ok((secret_key, public_key))
     }
 
     pub fn verify_proof<E: PairingEngine>(
@@ -152,7 +150,7 @@ where
         r: &Randomness<C>,
         params: &Parameters<C>,
     ) -> Result<Ciphertext<C>, Error> {
-        let mut c1 = params.generator.clone();
+        let mut c1 = C::prime_subgroup_generator();
         c1.mul_assign(r.0.clone());
 
         let mut p_r = pk.clone();
@@ -166,20 +164,17 @@ where
         Ok((c1, c2))
     }
 
-    pub fn decrypt<E: PairingEngine>(
+    pub fn decrypt(
         cipher: Ciphertext<C>,
         sk: SecretKey<C>,
         params: &Parameters<C>,
-    ) -> anyhow::Result<Plaintext<C>>
-    where
-        C::Affine: ToConstraintField<E::Fr>,
-    {
+    ) -> anyhow::Result<Plaintext<C>> {
         let c1 = cipher.0;
         let c2 = cipher.1;
 
         // compute s = c1^secret_key
         let mut s = c1;
-        s.mul_assign(sk.0);
+        s.mul_assign(sk);
         let sa = s.into_affine();
 
         // compute dh = H(s)
@@ -341,7 +336,10 @@ where
 
 #[cfg(test)]
 mod test {
-    use crate::{ark_to_bytes, EncryptCircuit};
+    use crate::{
+        ark_from_bytes, ark_to_bytes, ciphertext_from_bytes, ciphertext_to_bytes, Bls12377Params,
+        EncryptCircuit,
+    };
     use crate::{poseidon, Parameters};
     use ark_bls12_377::{constraints::G1Var, Bls12_377, Fq, Fr, FrParameters, G1Projective};
     use ark_bw6_761::BW6_761 as P;
@@ -367,17 +365,39 @@ mod test {
         let bytes = [1, 2, 3];
         let msg = Fr::from_random_bytes(&bytes).unwrap();
 
-        let params = Parameters::<G1Projective> {
-            generator: G1Projective::prime_subgroup_generator(),
-            poseidon: poseidon::get_bls12377_fq_params(2),
-        };
+        let (sk, pk) = TestEnc::keygen(&Bls12377Params, &mut rng).unwrap();
 
-        let (_, pub_key) = TestEnc::keygen(&params, &mut rng).unwrap();
+        let sk_bytes = ark_to_bytes(sk).unwrap();
+        println!("sk: {}", hex::encode(sk_bytes.clone()));
+
+        let circuit =
+            TestEnc::new(pk.clone(), msg.clone().into(), &Bls12377Params, &mut rng).unwrap();
+
+        let ciphertext = circuit.enc;
+        let cipher = ciphertext_to_bytes(ciphertext.clone()).unwrap();
+        let decoded = ciphertext_from_bytes::<G1Projective, _>(&cipher).unwrap();
+
+        assert_eq!(ciphertext, decoded);
+
+        let sk_recovered = ark_from_bytes(sk_bytes).unwrap();
+
+        let plaintext = TestEnc::decrypt(decoded, sk_recovered, &Bls12377Params).unwrap();
+
+        assert_eq!(msg, plaintext);
+    }
+
+    #[test]
+    fn test_encryption_circuit() {
+        let mut rng = test_rng();
+        let bytes = [1, 2, 3];
+        let msg = Fr::from_random_bytes(&bytes).unwrap();
+
+        let (_, pub_key) = TestEnc::keygen(&Bls12377Params, &mut rng).unwrap();
 
         let circuit = TestEnc::new(
             pub_key.clone(),
             msg.clone().into(),
-            params.poseidon.clone(),
+            &Bls12377Params,
             &mut rng,
         )
         .unwrap();
@@ -389,38 +409,32 @@ mod test {
         let circuit = TestEnc::new(
             pub_key.clone(),
             msg.clone().into(),
-            params.poseidon.clone(),
+            &Bls12377Params,
             &mut rng,
         )
         .unwrap();
         let (pk, vk) = Groth16::<P>::setup(circuit, &mut rng).unwrap();
 
-        let circuit = TestEnc::new(
-            pub_key,
-            msg.clone().into(),
-            params.poseidon.clone(),
-            &mut rng,
-        )
-        .unwrap();
+        let circuit = TestEnc::new(pub_key, msg.clone().into(), &Bls12377Params, &mut rng).unwrap();
         let enc = circuit.enc.clone();
         let proof = Groth16::prove(&pk, circuit, &mut rng).unwrap();
 
-        let valid_proof = TestEnc::verify_proof(&vk, proof, enc, &params).unwrap();
+        let valid_proof = TestEnc::verify_proof(&vk, proof, enc, &Bls12377Params).unwrap();
         assert!(valid_proof);
     }
 
-    // #[test]
-    // fn test_elgamal_keygen() {
-    //     let mut rng = test_rng();
-    //     let msg = JubJub::rand(&mut rng);
-    //
-    //     let params = ElGamal::<JubJub>::setup(&mut rng).unwrap();
-    //     let (pk, sk) = ElGamal::<JubJub>::keygen(&params, &mut rng).unwrap();
-    //
-    //     let pk_bytes = ark_to_bytes(pk).unwrap();
-    //     let sk_bytes = ark_to_bytes(sk.0).unwrap();
-    //
-    //     println!("sk: {}", hex::encode(sk_bytes));
-    //     println!("pk: {}", hex::encode(pk_bytes));
-    // }
+    #[test]
+    fn test_elgamal_keygen() {
+        let mut rng = test_rng();
+
+        let params = &Bls12377Params;
+
+        let (sk, pk) = TestEnc::keygen(params, &mut rng).unwrap();
+
+        let pk_bytes = ark_to_bytes(pk).unwrap();
+        let sk_bytes = ark_to_bytes(sk.0).unwrap();
+
+        println!("sk: {}", hex::encode(sk_bytes));
+        println!("pk: {}", hex::encode(pk_bytes));
+    }
 }

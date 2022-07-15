@@ -14,20 +14,27 @@ pub use traits::*;
 pub use utils::*;
 pub use wallet::*;
 
+pub use zkp::{
+    Bls12377 as ProjectiveCurve, Bls12377Params as CircuitParams, Bls12377Var as CurveVar,
+    BW6_761 as PairingEngine,
+};
+use zkp::{Bls12377, Bls12377Var, EncryptCircuit};
+
+pub type Encryption = zkp::EncryptCircuit<ProjectiveCurve, CurveVar>;
+
 #[cfg(test)]
 mod tests {
     use crate::{keypair_from_hex, keypair_gen};
-    
+
     use ecdsa_fun::adaptor::{Adaptor, HashTranscript};
-    
+
     use ethers::prelude::*;
     use ethers::utils::parse_ether;
     use rand_chacha::ChaCha20Rng;
     use secp256kfun::nonce::Deterministic;
     use sha2::Sha256;
-    
+
     use std::str::FromStr;
-    
 
     const ALICE_SK: &str = "ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
     const BOB_SK: &str = "59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d";

@@ -1,10 +1,11 @@
 use crate::traits::ChainProvider;
 use crate::utils::keypair_gen;
+use crate::{
+    keypair_from_bytes, keypair_from_hex, CircuitParams, Encryption, PairingEngine, ProjectiveCurve,
+};
 use anyhow::anyhow;
 use ecdsa_fun::adaptor::{Adaptor, EncryptedSignature, HashTranscript};
 use ethers::prelude::*;
-
-use crate::{keypair_from_bytes, keypair_from_hex};
 use futures::channel::{mpsc, oneshot};
 use rand::{CryptoRng, Rng};
 use rand_chacha::ChaCha20Rng;
@@ -17,8 +18,9 @@ use std::collections::HashMap;
 use std::fmt::Display;
 use std::path::Path;
 use zkp::{
-    ark_from_bytes, ark_to_bytes, read_proving_key, Bls12_381, Encryption, JubJub, ProjectiveCurve,
-    Proof, ProvingKey, JUB_JUB_PARAMETERS,
+    ark_from_bytes, ark_to_bytes, bytes_to_plaintext_chunks, ciphertext_from_bytes,
+    ciphertext_to_bytes, plaintext_chunks_to_bytes, read_proving_key, Ciphertext, Proof,
+    ProvingKey,
 };
 
 pub struct Seller<TChainProvider> {
@@ -29,7 +31,7 @@ pub struct Seller<TChainProvider> {
     wallet: crate::LocalWallet,
     from_buyers: mpsc::Receiver<SellerMsg>,
     data_keys: HashMap<Address, Scalar>,
-    circuit_pk: ProvingKey<Bls12_381>,
+    circuit_pk: ProvingKey<PairingEngine>,
 }
 
 pub enum SellerMsg {
@@ -59,7 +61,7 @@ impl<TChainProvider: ChainProvider> Seller<TChainProvider> {
         cost: f64,
         chain: TChainProvider,
         wallet: crate::LocalWallet,
-        circuit_pk: ProvingKey<Bls12_381>,
+        circuit_pk: ProvingKey<PairingEngine>,
     ) -> anyhow::Result<(Self, mpsc::Sender<SellerMsg>)> {
         let nonce_gen = Deterministic::<Sha256>::default();
         let adaptor = Adaptor::<HashTranscript<Sha256, ChaCha20Rng>, _>::new(nonce_gen);
@@ -140,13 +142,15 @@ impl<TChainProvider: ChainProvider> Seller<TChainProvider> {
         }
     }
 
-    fn elgamal_gen_derive_secp256k1() -> anyhow::Result<(zkp::PublicKey<JubJub>, Scalar, Point)> {
+    fn elgamal_gen_derive_secp256k1(
+    ) -> anyhow::Result<(zkp::PublicKey<ProjectiveCurve>, Scalar, Point)> {
         loop {
             let (elgamal_sk, elgamal_pk) =
-                Encryption::keygen(&JUB_JUB_PARAMETERS, &mut rand::thread_rng())?;
+                Encryption::keygen(&CircuitParams, &mut rand::thread_rng())?;
 
-            let elgamal_sk_bytes = ark_to_bytes(elgamal_sk.0)
+            let elgamal_sk_bytes = ark_to_bytes(elgamal_sk)
                 .map_err(|e| anyhow!("error encoding elgamal secret key: {e}"))?;
+
             match keypair_from_bytes(elgamal_sk_bytes) {
                 Ok((secp_sk, secp_pk)) => return Ok((elgamal_pk, secp_sk, secp_pk)),
                 Err(_) => continue,
@@ -157,18 +161,20 @@ impl<TChainProvider: ChainProvider> Seller<TChainProvider> {
     pub fn encrypt<R: Rng + CryptoRng>(
         &self,
         plaintext: &[u8],
-        pk: zkp::PublicKey<JubJub>,
+        pk: zkp::PublicKey<ProjectiveCurve>,
         mut rng: &mut R,
     ) -> anyhow::Result<(Vec<u8>, Vec<u8>)> {
-        let msg = ark_from_bytes(&plaintext[0..32])
+        let mut msg = bytes_to_plaintext_chunks::<ProjectiveCurve, _>(&plaintext)
             .map_err(|e| anyhow!("error casting plaintext: {e}"))?;
 
-        let encrypt = Encryption::new(pk, msg, &JUB_JUB_PARAMETERS, rng)
+        let msg = msg.remove(0);
+
+        let encrypt = Encryption::new(pk, msg, &CircuitParams, rng)
             .map_err(|e| anyhow!("error encrypting data: {e}"))?;
         let (ciphertext, proof) = encrypt.prove(&self.circuit_pk, &mut rng)?;
 
-        let ciphertext_encoded =
-            ark_to_bytes(ciphertext).map_err(|e| anyhow!("error encoding ciphertext: {e}"))?;
+        let ciphertext_encoded = ciphertext_to_bytes::<ProjectiveCurve>(ciphertext.clone())
+            .map_err(|e| anyhow!("error encoding ciphertext: {e}"))?;
 
         let proof_encoded = ark_to_bytes(proof)?;
 

@@ -12,8 +12,8 @@ use gumdrop::Options;
 
 use inquire::{Confirm, Password, Select, Text};
 use scriptless_zkcp::{
-    keypair_from_bip39, keypair_from_hex, keypair_gen, write_to_keystore, Ethereum, LocalWallet,
-    Seller, Step1Msg,
+    keypair_from_bip39, keypair_from_hex, keypair_gen, write_to_keystore, CircuitParams,
+    Encryption, Ethereum, LocalWallet, PairingEngine, Seller, Step1Msg,
 };
 use scriptless_zkcp::{Buyer, ChainProvider};
 use server::client;
@@ -21,10 +21,7 @@ use server::client;
 use std::process;
 use tokio::spawn;
 use url::Url;
-use zkp::{
-    read_verifying_key, write_artifacts_json, Bls12_381, EdwardsVar, EncryptCircuit, Encryption,
-    JubJub, JUB_JUB_PARAMETERS,
-};
+use zkp::{read_verifying_key, write_artifacts_json};
 
 const CHAIN_ID: u64 = 31337;
 
@@ -108,7 +105,7 @@ async fn sell(args: SellArgs) -> anyhow::Result<()> {
         .map_err(|e| anyhow!("error parsing price: {e}"))?;
 
     let (pk, vk) =
-        Encryption::compile::<Bls12_381, _>(&JUB_JUB_PARAMETERS, &mut rand::thread_rng())?;
+        Encryption::compile::<PairingEngine, _>(&CircuitParams, &mut rand::thread_rng())?;
 
     println!("writing artifacts...");
     write_artifacts_json("./", pk.clone(), vk)?;
@@ -203,7 +200,7 @@ async fn buy(args: BuyArgs) -> anyhow::Result<()> {
 async fn compile(args: CompileArgs) -> anyhow::Result<()> {
     println!("compiling circuit...");
     let (pk, vk) =
-        Encryption::compile::<Bls12_381, _>(&JUB_JUB_PARAMETERS, &mut rand::thread_rng())?;
+        Encryption::compile::<PairingEngine, _>(&CircuitParams, &mut rand::thread_rng())?;
 
     println!("writing artifacts...");
     write_artifacts_json(args.output_dir, pk, vk)?;
