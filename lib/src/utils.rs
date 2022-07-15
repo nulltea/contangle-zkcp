@@ -3,7 +3,7 @@ use anyhow::anyhow;
 use ethers::prelude::coins_bip39::English;
 use ethers::prelude::MnemonicBuilder;
 
-use secp256kfun::marker::{Mark, NonZero, Normal, Secret, Zero};
+use secp256kfun::marker::{Mark, NonZero, Normal};
 use secp256kfun::{g, Point, Scalar, G};
 use std::fs;
 use std::path::Path;

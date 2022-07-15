@@ -1,7 +1,7 @@
 use crate::traits::ChainProvider;
-use crate::utils::keypair_gen;
+
 use crate::{
-    keypair_from_bytes, keypair_from_hex, CircuitParams, Encryption, PairingEngine, ProjectiveCurve,
+    keypair_from_bytes, CircuitParams, Encryption, PairingEngine, ProjectiveCurve,
 };
 use anyhow::anyhow;
 use ecdsa_fun::adaptor::{Adaptor, EncryptedSignature, HashTranscript};
@@ -15,11 +15,11 @@ use secp256kfun::{g, Point, Scalar, G};
 use sha2::Sha256;
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
-use std::fmt::Display;
-use std::path::Path;
+
+
 use zkp::{
-    ark_from_bytes, ark_to_bytes, bytes_to_plaintext_chunks, ciphertext_from_bytes,
-    ciphertext_to_bytes, plaintext_chunks_to_bytes, read_proving_key, Ciphertext, Proof,
+    ark_to_bytes, bytes_to_plaintext_chunks,
+    ciphertext_to_bytes,
     ProvingKey,
 };
 
