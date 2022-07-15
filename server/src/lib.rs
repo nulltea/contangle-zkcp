@@ -3,7 +3,6 @@ pub mod client;
 #[macro_use]
 extern crate rocket;
 
-use anyhow::anyhow;
 use ecdsa_fun::adaptor::EncryptedSignature;
 use ethers::prelude::*;
 use futures::channel::{mpsc, oneshot};
@@ -11,12 +10,11 @@ use futures_util::{SinkExt, TryFutureExt};
 use rocket::http::Status;
 use rocket::response::status;
 use rocket::serde::{json::Json, Deserialize, Serialize};
-use rocket::{response, State};
-use scriptless_zkcp::SellerMsg;
-use secp256kfun::hex::HexError;
+use rocket::State;
+use scriptless_zkcp::{SellerMsg, Step1Msg};
+
 use secp256kfun::Point;
-use serde::de::DeserializeOwned;
-use std::borrow::BorrowMut;
+
 use std::str::FromStr;
 
 struct Runtime {
@@ -34,6 +32,7 @@ struct InfoResponse {
 #[serde(crate = "rocket::serde")]
 struct Step1Response {
     ciphertext: Vec<u8>,
+    proof_of_encryption: Vec<u8>,
     data_pk: String,
     address: String,
 }
@@ -68,15 +67,21 @@ async fn step1(
         .await
         .map_err(|e| status::Custom(Status::ServiceUnavailable, e.to_string()))?;
 
-    let (ciphertext, data_pk, address) = rx
+    let Step1Msg {
+        ciphertext,
+        proof_of_encryption,
+        data_pk,
+        seller_address,
+    } = rx
         .await
         .map_err(|e| status::Custom(Status::ServiceUnavailable, e.to_string()))?
         .map_err(|e| status::Custom(Status::InternalServerError, e.to_string()))?;
 
     Ok(Json(Step1Response {
         ciphertext,
+        proof_of_encryption,
         data_pk: hex::encode(data_pk.to_bytes()),
-        address: hex::encode(address.to_fixed_bytes()),
+        address: hex::encode(seller_address.to_fixed_bytes()),
     }))
 }
 

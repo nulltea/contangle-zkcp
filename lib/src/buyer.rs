@@ -1,14 +1,16 @@
 use crate::traits::ChainProvider;
-use crate::utils::decrypt;
 use anyhow::anyhow;
 use backoff::ExponentialBackoff;
 use ecdsa_fun::adaptor::{Adaptor, EncryptedSignature, HashTranscript};
-use ecdsa_fun::Signature;
-use ethers::prelude::{Address, LocalWallet, H256};
+use std::path::Path;
+
+use crate::{CircuitParams, Encryption, PairingEngine, ProjectiveCurve};
+use ethers::prelude::{Address, H256};
 use rand_chacha::ChaCha20Rng;
 use secp256kfun::nonce::Deterministic;
 use secp256kfun::{Point, Scalar};
 use sha2::Sha256;
+use zkp::{ark_from_bytes, ark_to_bytes, plaintext_chunks_to_bytes, SecretKey, VerifyingKey};
 
 pub struct Buyer<TChainProvider> {
     chain: TChainProvider,
@@ -32,6 +34,24 @@ impl<TChainProvider: ChainProvider> Buyer<TChainProvider> {
             data_pk: None,
             encrypted_sig: None,
         }
+    }
+
+    pub fn verify_proof_of_encryption(
+        &self,
+        vk: VerifyingKey<PairingEngine>,
+        proof: Vec<u8>,
+        ciphertext: &[u8],
+    ) -> anyhow::Result<bool> {
+        let proof_of_encryption = ark_from_bytes(proof)?;
+        let ciphertext_var =
+            ark_from_bytes(&ciphertext).map_err(|e| anyhow!("error casting ciphertext"))?;
+
+        Encryption::verify_proof::<PairingEngine>(
+            &vk,
+            proof_of_encryption,
+            ciphertext_var,
+            &CircuitParams,
+        )
     }
 
     /// Step 2: Bob signs a transaction to transfer coins to Alice address
@@ -83,4 +103,14 @@ impl<TChainProvider: ChainProvider> Buyer<TChainProvider> {
 
         decrypt(&recovered_sk, &*self.ciphertext.take().unwrap())
     }
+}
+
+pub fn decrypt(sk: &Scalar, ciphertext: &[u8]) -> anyhow::Result<Vec<u8>> {
+    let sk: SecretKey<ProjectiveCurve> =
+        ark_from_bytes(sk.to_bytes()).map_err(|e| anyhow!("error casting secret key: {e}"))?;
+    let ciphertext =
+        ark_from_bytes(ciphertext).map_err(|e| anyhow!("error casting ciphertext: {e}"))?;
+    let plaintext = Encryption::decrypt(ciphertext, sk, &CircuitParams)?;
+    plaintext_chunks_to_bytes::<ProjectiveCurve>(vec![plaintext])
+        .map_err(|e| anyhow!("error casting plaintext: {e}"))
 }

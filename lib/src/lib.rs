@@ -14,20 +14,27 @@ pub use traits::*;
 pub use utils::*;
 pub use wallet::*;
 
+pub use zkp::{
+    Bls12377 as ProjectiveCurve, Bls12377Params as CircuitParams, Bls12377Var as CurveVar,
+    BW6_761 as PairingEngine,
+};
+use zkp::{Bls12377, Bls12377Var, EncryptCircuit};
+
+pub type Encryption = zkp::EncryptCircuit<ProjectiveCurve, CurveVar>;
+
 #[cfg(test)]
 mod tests {
     use crate::{keypair_from_hex, keypair_gen};
-    use anyhow::anyhow;
+
     use ecdsa_fun::adaptor::{Adaptor, HashTranscript};
-    use ecdsa_fun::ECDSA;
+
     use ethers::prelude::*;
     use ethers::utils::parse_ether;
     use rand_chacha::ChaCha20Rng;
     use secp256kfun::nonce::Deterministic;
     use sha2::Sha256;
-    use sha3::Keccak256;
+
     use std::str::FromStr;
-    use url::Url;
 
     const ALICE_SK: &str = "ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
     const BOB_SK: &str = "59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d";
@@ -35,7 +42,7 @@ mod tests {
 
     #[test]
     fn verify_decrypted_adaptor_on_ethereum() {
-        let (sk, pk) = keypair_from_hex(BOB_SK).unwrap();
+        let (sk, _pk) = keypair_from_hex(BOB_SK).unwrap();
         let (data_sk, data_pk) = keypair_gen();
         let nonce_gen = Deterministic::<Sha256>::default();
         let adaptor = Adaptor::<HashTranscript<Sha256, ChaCha20Rng>, _>::new(nonce_gen);
@@ -54,7 +61,7 @@ mod tests {
             hex::encode(bob_wallet.signer().verifying_key().to_bytes()),
             bob_wallet.address()
         );
-        let bob_address = bob_wallet.address();
+        let _bob_address = bob_wallet.address();
         let transfer_tx = TransactionRequest::new()
             .from(bob_wallet.address())
             .to(alice_wallet.address())
@@ -84,7 +91,7 @@ mod tests {
             bob_wallet.address()
         );
 
-        let encoded_signed_tx = transfer_tx.rlp_signed(&Signature { r, s, v });
+        let _encoded_signed_tx = transfer_tx.rlp_signed(&Signature { r, s, v });
         let res = Signature { r, s, v }.verify(tx_encoded, bob_wallet.address());
 
         if let Err(ref e) = res {

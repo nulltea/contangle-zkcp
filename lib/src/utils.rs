@@ -1,9 +1,9 @@
 use anyhow::anyhow;
-use bip39::{Language, Mnemonic};
+
 use ethers::prelude::coins_bip39::English;
 use ethers::prelude::MnemonicBuilder;
-use secp256kfun::hex::HexError;
-use secp256kfun::marker::{Mark, NonZero, Normal};
+
+use secp256kfun::marker::{Mark, NonZero, Normal, Secret, Zero};
 use secp256kfun::{g, Point, Scalar, G};
 use std::fs;
 use std::path::Path;
@@ -19,6 +19,17 @@ pub fn keypair_from_hex(hex: &str) -> anyhow::Result<(Scalar, Point)> {
     let sk = Scalar::from_str(hex).map_err(|e| anyhow!("error parsing hex: {e}"))?;
     let pk = g!(sk * G).mark::<Normal>();
     Ok((sk, pk))
+}
+
+pub fn keypair_from_bytes<B: AsRef<[u8]>>(buf: B) -> anyhow::Result<(Scalar, Point)> {
+    match Scalar::from_slice(buf.as_ref()).map(|s| s.mark::<NonZero>()) {
+        Some(Some(sk)) => {
+            let sk = sk;
+            let pk = g!(sk * G).mark::<Normal>();
+            Ok((sk, pk))
+        }
+        _ => Err(anyhow!("failed to decoding secp256k1 key from bytes")),
+    }
 }
 
 pub fn keypair_from_bip39(phrase: &str) -> anyhow::Result<(Scalar, Point)> {
@@ -68,13 +79,17 @@ pub fn read_from_keystore<P: AsRef<Path>, S: AsRef<[u8]>>(
     Ok((sk, pk))
 }
 
-pub fn encrypt(pk: &Point, plaintext: &[u8]) -> anyhow::Result<Vec<u8>> {
-    let pk = pk.to_bytes();
-    ecies::encrypt(&pk, plaintext).map_err(|e| anyhow!("encryption failed: {e}"))
-    // todo: do should be a verifiable encryption with ECDH implemented as an `akrworks` circuit
-}
+#[cfg(test)]
+mod test {
+    use crate::keypair_from_hex;
 
-pub fn decrypt(sk: &Scalar, ciphertext: &[u8]) -> anyhow::Result<Vec<u8>> {
-    let sk = sk.to_bytes();
-    ecies::decrypt(&sk, ciphertext).map_err(|e| anyhow!("decryption failed: {e}"))
+    #[test]
+    fn test_keypair_from_hex() {
+        let (sk, pk) =
+            keypair_from_hex(&"ea734cef7d66a4a51df3fe20f4d6a21f9439cf325e64342234c67cc04db1050a")
+                .unwrap();
+
+        println!("sk: {}", hex::encode(sk.to_bytes()));
+        println!("pk: {}", hex::encode(pk.to_bytes()));
+    }
 }

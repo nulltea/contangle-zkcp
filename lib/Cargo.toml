@@ -27,3 +27,5 @@ bip39 = "1.0.1"
 hex = "0.4.3"
 
 tokio = { version = "1", default-features = false, features = ["macros", "rt-multi-thread"] }
+
+zkp = { path = "../zkp" }

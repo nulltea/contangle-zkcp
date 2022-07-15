@@ -15,6 +15,8 @@ pub enum Command {
     Sell(SellArgs),
     #[options(help = "Run buyer client")]
     Buy(BuyArgs),
+    #[options(help = "Compile circuits")]
+    Compile(CompileArgs),
 }
 
 #[derive(Debug, Options, Clone)]
@@ -49,6 +51,12 @@ pub struct SellArgs {
 
     #[options(help = "wallet password")]
     pub password: Option<String>,
+
+    #[options(
+        help = "path for the key used to prove encryption",
+        default = "./circuit.pk"
+    )]
+    pub encryption_proving_key_path: String,
 }
 
 #[derive(Debug, Options, Clone)]
@@ -75,4 +83,21 @@ pub struct BuyArgs {
 
     #[options(help = "wallet password")]
     pub password: Option<String>,
+
+    #[options(
+        help = "path for the key used to verify proof of encryption",
+        default = "./circuit.vk"
+    )]
+    pub encryption_verifying_key_path: String,
+
+    #[options(help = "skip confirms", default = "false")]
+    pub non_interactive: bool,
+}
+
+#[derive(Debug, Options, Clone)]
+pub struct CompileArgs {
+    help: bool,
+
+    #[options(help = "path to write circuit artifacts", default = "./")]
+    pub output_dir: String,
 }

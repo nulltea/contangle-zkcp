@@ -1,10 +1,10 @@
 use crate::utils::keypair_from_hex;
 use crate::{keypair_gen, read_from_keystore};
-use ethers::prelude::Address;
-use k256::ecdsa::SigningKey;
+
+
 use secp256kfun::{Point, Scalar};
 use std::path::Path;
-use std::{fs, io};
+
 
 pub struct LocalWallet {
     sk: Scalar,
