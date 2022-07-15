@@ -1,6 +1,7 @@
 use crate::{poseidon, Parameters};
 use ark_bls12_377::G1Projective;
 use ark_ec::ProjectiveCurve;
+use ark_ed_on_bls12_381::EdwardsProjective as JubJub;
 use json::JsonValue;
 use json::{array, object};
 use lazy_static::lazy_static;
@@ -8,6 +9,9 @@ use lazy_static::lazy_static;
 lazy_static! {
     pub static ref Bls12377Params: Parameters<G1Projective> = Parameters::<G1Projective>{
         poseidon: poseidon::get_bls12377_fq_params(2),
+    };
+    pub static ref JubJubParams: Parameters<JubJub> = Parameters::<JubJub>{
+        poseidon: poseidon::get_jubjub_fq_params(2),
     };
     // bls12377_rate2_constraints:
     pub static ref P1: JsonValue = object! {

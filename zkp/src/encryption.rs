@@ -99,21 +99,21 @@ where
         })
     }
 
-    // pub fn compile<E: PairingEngine, R>(
-    //     params: &Parameters<C>,
-    //     mut rng: &mut R,
-    // ) -> anyhow::Result<(ProvingKey<E>, VerifyingKey<E>)>
-    // where
-    //     R: CryptoRng + RngCore,
-    //     Self: ConstraintSynthesizer<E::Fr>,
-    // {
-    //     let pk = C::rand(&mut rng);
-    //     let msg = C::ScalarField::from_random_bytes(&*vec![]).unwrap();
-    //     let c = Self::new(pk, msg, params, &mut rng).unwrap();
-    //     let (pk, vk) = Groth16::<E>::setup(c, &mut rng)
-    //         .map_err(|e| anyhow!("error compiling circuit: {e}"))?;
-    //     Ok((pk, vk))
-    // }
+    pub fn compile<E: PairingEngine, R>(
+        params: &Parameters<C>,
+        mut rng: &mut R,
+    ) -> anyhow::Result<(ProvingKey<E>, VerifyingKey<E>)>
+    where
+        R: CryptoRng + RngCore,
+        Self: ConstraintSynthesizer<E::Fr>,
+    {
+        let pk = C::rand(&mut rng);
+        let msg = C::BaseField::from_random_bytes(&*vec![]).unwrap();
+        let c = Self::new(pk, msg, params, &mut rng).unwrap();
+        let (pk, vk) = Groth16::<E>::setup(c, &mut rng)
+            .map_err(|e| anyhow!("error compiling circuit: {e}"))?;
+        Ok((pk, vk))
+    }
 
     pub fn keygen<R: CryptoRng + RngCore>(
         params: &Parameters<C>,
@@ -258,65 +258,33 @@ where
         Ok((c1, c2))
     }
 
-    // pub fn constraint_inputs(
-    //     &self,
-    //     cs: ConstraintSystemRef<C::BaseField>,
-    //     ciphertext: &(CV, NonNativeFieldVar<C::ScalarField, C::BaseField>),
-    // ) -> Result<(), SynthesisError> {
-    //     // input commitment
-    //     let ciphertext_commitment_var = FpVar::<C::BaseField>::new_variable(
-    //         ns!(cs, "ciphertext_commitment"),
-    //         || Ok(Self::commit_to_inputs(&self.enc, &self.params)),
-    //         AllocationMode::Input,
-    //     )?;
-    //
-    //     let mut sponge = PoseidonSpongeVar::new(cs.clone(), &self.params.poseidon);
-    //     sponge.absorb(&ciphertext.0)?;
-    //
-    //     let native = self.enc.1;
-    //     let nonnative = &ciphertext.1;
-    //     let scalar_in_fq = &C::BaseField::from_repr(
-    //         <C::BaseField as PrimeField>::BigInt::from_bits_le(&native.into_repr().to_bits_le()),
-    //     )
-    //     .unwrap(); // because Fr < Fq
-    //     let scalar_var = FpVar::new_witness(ns!(cs.clone(), "scalar fq"), || Ok(scalar_in_fq))?;
-    //     sponge.absorb(&scalar_var)?;
-    //     // Pass from Fq(Fp) -> Bits<Fq)[0..Fp]
-    //     let native_bits = scalar_var.to_bits_le()?;
-    //     let nonnative_bits = nonnative.to_bits_le()?;
-    //     for (fq_base, nonnative_base) in native_bits
-    //         .iter()
-    //         .zip(nonnative_bits.iter())
-    //         .take(C::ScalarField::size_in_bits())
-    //     {
-    //         fq_base.enforce_equal(nonnative_base)?;
-    //     }
-    //     // enforce the rest is 0 so there is no different witness possible
-    //     // for the Fq(Fp) var
-    //     let diff = native_bits.len() - C::ScalarField::size_in_bits();
-    //     let false_var = Boolean::constant(false);
-    //     for unconstrained_bit in native_bits.iter().rev().take(diff) {
-    //         unconstrained_bit.enforce_equal(&false_var)?;
-    //     }
-    //
-    //     let exp = sponge
-    //         .squeeze_field_elements(1)
-    //         .and_then(|mut v| Ok(v.remove(0)))?;
-    //
-    //     exp.enforce_equal(&ciphertext_commitment_var)
-    // }
-    //
-    // pub fn commit_to_inputs(ciphertext: &Ciphertext<C>, params: &Parameters<C>) -> C::BaseField {
-    //     let mut sponge = PoseidonSponge::new(&params.poseidon);
-    //     sponge.absorb(&ciphertext.0.into_affine());
-    //     let scalar_in_fq =
-    //         &C::BaseField::from_repr(<C::BaseField as PrimeField>::BigInt::from_bits_le(
-    //             &ciphertext.1.into_repr().to_bits_le(),
-    //         ))
-    //         .unwrap();
-    //     sponge.absorb(&scalar_in_fq);
-    //     sponge.squeeze_field_elements(1).remove(0)
-    // }
+    pub fn constraint_witness(
+        &self,
+        cs: ConstraintSystemRef<C::BaseField>,
+        plaintext: &FpVar<C::BaseField>,
+    ) -> Result<(), SynthesisError> {
+        // input commitment
+        let ciphertext_commitment_var = FpVar::<C::BaseField>::new_variable(
+            ns!(cs, "plaintext_commitment"),
+            || Ok(Self::commit_to_message(&self.msg, &self.params)),
+            AllocationMode::Input,
+        )?;
+
+        let mut sponge = PoseidonSpongeVar::new(cs.clone(), &self.params.poseidon);
+        sponge.absorb(&plaintext)?;
+
+        let exp = sponge
+            .squeeze_field_elements(1)
+            .and_then(|mut v| Ok(v.remove(0)))?;
+
+        exp.enforce_equal(&ciphertext_commitment_var)
+    }
+
+    pub fn commit_to_message(plaintext: &Plaintext<C>, params: &Parameters<C>) -> C::BaseField {
+        let mut sponge = PoseidonSponge::new(&params.poseidon);
+        sponge.absorb(&plaintext);
+        sponge.squeeze_field_elements(1).remove(0)
+    }
 }
 
 impl<C, CV> ConstraintSynthesizer<C::BaseField> for EncryptCircuit<C, CV>
@@ -344,18 +312,15 @@ mod test {
     use crate::poseidon::get_jubjub_fq_params;
     use crate::{
         ark_from_bytes, ark_to_bytes, ciphertext_from_bytes, ciphertext_to_bytes, Bls12377Params,
-        EncryptCircuit,
+        EncryptCircuit, JubJubParams,
     };
     use crate::{poseidon, Parameters};
-    use ark_bls12_377::{constraints::G1Var, Bls12_377, Fq, Fr, FrParameters, G1Projective};
-    use ark_bls12_381::Bls12_381 as BLS;
-    use ark_bw6_761::BW6_761 as P;
+    use ark_bls12_381::Bls12_381 as E;
     use ark_crypto_primitives::encryption::elgamal::ElGamal;
     use ark_crypto_primitives::encryption::AsymmetricEncryptionScheme;
     use ark_ec::ProjectiveCurve;
     use ark_ed_on_bls12_381::{
-        constraints::EdwardsVar, EdwardsProjective as JubJub, Fq as EdFq, Fr as EdFr,
-        FrParameters as EdFrParameters,
+        constraints::EdwardsVar, EdwardsProjective as JubJub, Fq, Fr, FrParameters,
     };
     use ark_ff::{BigInteger, Field, Fp256, PrimeField, ToConstraintField};
     use ark_groth16::Groth16;
@@ -368,21 +333,21 @@ mod test {
     use ark_std::{test_rng, UniformRand};
     use std::borrow::Borrow;
 
-    type TestEnc = EncryptCircuit<G1Projective, G1Var>;
-    type TestEnc2 = EncryptCircuit<JubJub, EdwardsVar>;
+    type TestEnc = EncryptCircuit<JubJub, EdwardsVar>;
 
     #[test]
     fn test_elgamal_encryption() {
         let mut rng = test_rng();
+        let params = &JubJubParams;
+
         let bytes = [1, 2, 3];
         let msg = Fq::from_random_bytes(&bytes).unwrap();
 
-        let (sk, pk) = TestEnc::keygen(&Bls12377Params, &mut rng).unwrap();
+        let (sk, pk) = TestEnc::keygen(params, &mut rng).unwrap();
 
-        let circuit =
-            TestEnc::new(pk.clone(), msg.clone().into(), &Bls12377Params, &mut rng).unwrap();
+        let circuit = TestEnc::new(pk.clone(), msg.clone().into(), params, &mut rng).unwrap();
 
-        let plaintext = TestEnc::decrypt(circuit.enc, sk, &Bls12377Params).unwrap();
+        let plaintext = TestEnc::decrypt(circuit.enc, sk, params).unwrap();
 
         assert_eq!(msg, plaintext);
     }
@@ -392,43 +357,41 @@ mod test {
         pretty_env_logger::init();
         let mut rng = test_rng();
         let bytes = [1, 2, 3];
-        let msg = EdFq::from_random_bytes(&bytes).unwrap();
+        let msg = Fq::from_random_bytes(&bytes).unwrap();
 
-        let params = &Parameters::<JubJub> {
-            poseidon: get_jubjub_fq_params(2),
-        };
+        let params = &JubJubParams;
 
-        let (_, pub_key) = TestEnc2::keygen(params, &mut rng).unwrap();
+        let (_, pub_key) = TestEnc::keygen(params, &mut rng).unwrap();
 
-        let circuit = TestEnc2::new(pub_key.clone(), msg.clone().into(), params, &mut rng).unwrap();
-        let cs = ConstraintSystem::<EdFq>::new_ref();
+        let circuit = TestEnc::new(pub_key.clone(), msg.clone().into(), params, &mut rng).unwrap();
+        let cs = ConstraintSystem::<Fq>::new_ref();
         circuit.generate_constraints(cs.clone()).unwrap();
         println!("Num constraints: {}", cs.num_constraints());
         assert!(cs.is_satisfied().unwrap());
 
-        let circuit = TestEnc2::new(pub_key.clone(), msg.clone().into(), params, &mut rng).unwrap();
-        let (pk, vk) = Groth16::<BLS>::setup(circuit, &mut rng).unwrap();
+        let circuit = TestEnc::new(pub_key.clone(), msg.clone().into(), params, &mut rng).unwrap();
+        let (pk, vk) = Groth16::<E>::setup(circuit, &mut rng).unwrap();
 
-        let circuit = TestEnc2::new(pub_key, msg.clone().into(), params, &mut rng).unwrap();
+        let circuit = TestEnc::new(pub_key, msg.clone().into(), params, &mut rng).unwrap();
         let enc = circuit.enc.clone();
         let proof = Groth16::prove(&pk, circuit, &mut rng).unwrap();
 
-        let valid_proof = TestEnc2::verify_proof(&vk, proof, enc, params).unwrap();
+        let valid_proof = TestEnc::verify_proof(&vk, proof, enc, params).unwrap();
         assert!(valid_proof);
     }
-    //
-    // #[test]
-    // fn test_elgamal_keygen() {
-    //     let mut rng = test_rng();
-    //
-    //     let params = &Bls12377Params;
-    //
-    //     let (sk, pk) = TestEnc::keygen(params, &mut rng).unwrap();
-    //
-    //     let pk_bytes = ark_to_bytes(pk).unwrap();
-    //     let sk_bytes = ark_to_bytes(sk.0).unwrap();
-    //
-    //     println!("sk: {}", hex::encode(sk_bytes));
-    //     println!("pk: {}", hex::encode(pk_bytes));
-    // }
+
+    #[test]
+    fn test_elgamal_keygen() {
+        let mut rng = test_rng();
+
+        let params = &JubJubParams;
+
+        let (sk, pk) = TestEnc::keygen(params, &mut rng).unwrap();
+
+        let pk_bytes = ark_to_bytes(pk).unwrap();
+        let sk_bytes = ark_to_bytes(sk.0).unwrap();
+
+        println!("sk: {}", hex::encode(sk_bytes));
+        println!("pk: {}", hex::encode(pk_bytes));
+    }
 }

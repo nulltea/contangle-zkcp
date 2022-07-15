@@ -15,10 +15,9 @@ pub use utils::*;
 pub use wallet::*;
 
 pub use zkp::{
-    Bls12377 as ProjectiveCurve, Bls12377Params as CircuitParams, Bls12377Var as CurveVar,
-    BW6_761 as PairingEngine,
+    Bls12_381 as PairingEngine, JubJub as ProjectiveCurve, JubJubParams as CircuitParams,
+    JubJubVar as CurveVar,
 };
-use zkp::{Bls12377, Bls12377Var, EncryptCircuit};
 
 pub type Encryption = zkp::EncryptCircuit<ProjectiveCurve, CurveVar>;
 
