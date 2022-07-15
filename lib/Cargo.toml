@@ -18,6 +18,7 @@ ecdsa_fun = { version = "0.7.1", features = ["adaptor"] }
 byte-slice-cast = "1.2.1"
 
 backoff = {version = "0.4.0", features = ["tokio"]}
+lazy_static = "^1.4.0"
 
 ethers = { version = "0.6.0" }
 eth-keystore = "0.4.1"

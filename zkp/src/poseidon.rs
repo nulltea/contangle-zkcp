@@ -1,15 +1,22 @@
 use crate::parameters::*;
 use ark_bls12_377::Fq;
+use ark_ec::ProjectiveCurve;
+use ark_ff::PrimeField;
 use ark_sponge::poseidon::PoseidonParameters;
+use std::fmt::Debug;
 use std::str::FromStr;
 
 // returns optimized for constraints
-pub fn get_bls12377_fq_params(_rate: usize) -> PoseidonParameters<Fq> {
+pub fn get_poseidon_params<C: ProjectiveCurve>(_rate: usize) -> PoseidonParameters<C::BaseField>
+where
+    C::BaseField: PrimeField,
+    <C::BaseField as FromStr>::Err: Debug,
+{
     let arks = P1["ark"]
         .members()
         .map(|ark| {
             ark.members()
-                .map(|v| Fq::from_str(v.as_str().unwrap()).unwrap())
+                .map(|v| C::BaseField::from_str(v.as_str().unwrap()).unwrap())
                 .collect::<Vec<_>>()
         })
         .collect::<Vec<_>>();
@@ -17,7 +24,7 @@ pub fn get_bls12377_fq_params(_rate: usize) -> PoseidonParameters<Fq> {
         .members()
         .map(|m| {
             m.members()
-                .map(|v| Fq::from_str(v.as_str().unwrap()).unwrap())
+                .map(|v| C::BaseField::from_str(v.as_str().unwrap()).unwrap())
                 .collect::<Vec<_>>()
         })
         .collect::<Vec<_>>();

@@ -12,8 +12,8 @@ use gumdrop::Options;
 
 use inquire::{Confirm, Password, Select, Text};
 use scriptless_zkcp::{
-    keypair_from_bip39, keypair_from_hex, keypair_gen, write_to_keystore, CircuitParams,
-    Encryption, Ethereum, LocalWallet, PairingEngine, Seller, Step1Msg,
+    keypair_from_bip39, keypair_from_hex, keypair_gen, write_to_keystore, Encryption, Ethereum,
+    LocalWallet, PairingEngine, Seller, Step1Msg, ENC_PARAMS,
 };
 use scriptless_zkcp::{Buyer, ChainProvider};
 use server::client;
@@ -104,8 +104,7 @@ async fn sell(args: SellArgs) -> anyhow::Result<()> {
         .parse()
         .map_err(|e| anyhow!("error parsing price: {e}"))?;
 
-    let (pk, vk) =
-        Encryption::compile::<PairingEngine, _>(&CircuitParams, &mut rand::thread_rng())?;
+    let (pk, vk) = Encryption::compile::<PairingEngine, _>(&ENC_PARAMS, &mut rand::thread_rng())?;
 
     println!("writing artifacts...");
     write_artifacts_json("./", pk.clone(), vk)?;
@@ -199,8 +198,7 @@ async fn buy(args: BuyArgs) -> anyhow::Result<()> {
 
 async fn compile(args: CompileArgs) -> anyhow::Result<()> {
     println!("compiling circuit...");
-    let (pk, vk) =
-        Encryption::compile::<PairingEngine, _>(&CircuitParams, &mut rand::thread_rng())?;
+    let (pk, vk) = Encryption::compile::<PairingEngine, _>(&ENC_PARAMS, &mut rand::thread_rng())?;
 
     println!("writing artifacts...");
     write_artifacts_json(args.output_dir, pk, vk)?;
