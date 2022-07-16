@@ -17,3 +17,5 @@ data.json
 *.vk
 
 bought_data.json
+
+cache/

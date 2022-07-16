@@ -34,6 +34,12 @@ pub struct SellArgs {
     #[options(help = "path to the data file being sold")]
     pub data_path: Option<String>,
 
+    #[options(
+        help = "path to the directory where cache is stored",
+        default = "./cache"
+    )]
+    pub cache_dir: String,
+
     #[options(help = "price of the data")]
     pub price: Option<String>,
 

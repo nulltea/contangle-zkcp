@@ -11,7 +11,7 @@ use rocket::http::Status;
 use rocket::response::status;
 use rocket::serde::{json::Json, Deserialize, Serialize};
 use rocket::State;
-use scriptless_zkcp::{SellerMsg, Step1Msg};
+use scriptless_zkcp::{SellerMsg, Step0Msg, Step1Msg};
 
 use secp256kfun::Point;
 
@@ -26,6 +26,13 @@ struct Runtime {
 #[serde(crate = "rocket::serde")]
 struct InfoResponse {
     price: f64,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(crate = "rocket::serde")]
+struct Step0Response {
+    ciphertext: Vec<u8>,
+    proof_of_encryption: Vec<u8>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -47,6 +54,30 @@ struct Step3Request<'r> {
 #[get("/info")]
 async fn info(state: &State<Runtime>) -> Json<InfoResponse> {
     Json(InfoResponse { price: state.price })
+}
+
+#[get("/step0")]
+async fn step0(state: &State<Runtime>) -> Result<Json<Step0Response>, status::Custom<String>> {
+    let (tx, rx) = oneshot::channel();
+    state
+        .tx
+        .clone()
+        .send(SellerMsg::Step0 { resp_tx: tx })
+        .await
+        .map_err(|e| status::Custom(Status::ServiceUnavailable, e.to_string()))?;
+
+    let Step0Msg {
+        ciphertext,
+        proof_of_encryption,
+    } = rx
+        .await
+        .map_err(|e| status::Custom(Status::ServiceUnavailable, e.to_string()))?
+        .map_err(|e| status::Custom(Status::InternalServerError, e.to_string()))?;
+
+    Ok(Json(Step0Response {
+        ciphertext,
+        proof_of_encryption,
+    }))
 }
 
 #[get("/step1/<address>")]
@@ -122,7 +153,7 @@ pub async fn serve(to_runtime: mpsc::Sender<SellerMsg>, price: f64) {
             tx: to_runtime,
             price,
         })
-        .mount("/", routes![info, step1, step3])
+        .mount("/", routes![info, step0, step1, step3])
         .launch()
         .await
         .expect("expect server to run");

@@ -1,11 +1,11 @@
-use crate::{InfoResponse, Step1Response};
+use crate::{InfoResponse, Step0Response, Step1Response};
 use anyhow::anyhow;
+use async_trait::async_trait;
 use ecdsa_fun::adaptor::EncryptedSignature;
 use ethers::prelude::Address;
 use ethers::types::H256;
+use scriptless_zkcp::{CipherDownloader, Step1Msg};
 use secp256kfun::Point;
-
-use scriptless_zkcp::Step1Msg;
 use serde_json::json;
 use std::str::FromStr;
 use surf::Url;
@@ -93,5 +93,30 @@ impl SellerClient {
             .map_err(|e| anyhow!("error requesting step1: {e}"))?;
 
         H256::from_str(&tx_hash).map_err(|_e| anyhow!("error decoding hash"))
+    }
+}
+
+#[async_trait]
+impl CipherDownloader for SellerClient {
+    async fn download(&self) -> anyhow::Result<(Vec<u8>, Vec<u8>)> {
+        let mut resp = self
+            .client
+            .get(format!("step0"))
+            .await
+            .map_err(|e| anyhow!("error requesting step0: {e}"))?;
+
+        if resp.status() != 200 {
+            return Err(anyhow!("{}", resp.body_string().await.unwrap()));
+        }
+
+        let Step0Response {
+            ciphertext,
+            proof_of_encryption,
+        } = resp
+            .body_json::<Step0Response>()
+            .await
+            .map_err(|e| anyhow!("error decoding step1 response: {e}"))?;
+
+        return Ok((ciphertext, proof_of_encryption));
     }
 }

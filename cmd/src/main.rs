@@ -6,18 +6,17 @@ use crate::args::{BuyArgs, CLIArgs, Command, CompileArgs, SellArgs, SetupArgs};
 use anyhow::anyhow;
 use async_std::fs;
 use async_std::path::Path;
-
 use chrono;
 use gumdrop::Options;
-
 use inquire::{Confirm, Password, Select, Text};
 use scriptless_zkcp::{
-    keypair_from_bip39, keypair_from_hex, keypair_gen, write_to_keystore, Encryption, Ethereum,
-    LocalWallet, PairingEngine, Seller, Step1Msg, ENC_PARAMS,
+    cipher_host, keypair_from_bip39, keypair_from_hex, keypair_gen, verify_proof_of_encryption,
+    write_to_keystore, CipherDownloader, CipherHost, Encryption, Ethereum, LocalWallet,
+    PairingEngine, Seller, SellerConfig, Step1Msg, ENC_PARAMS,
 };
 use scriptless_zkcp::{Buyer, ChainProvider};
 use server::client;
-
+use std::path::PathBuf;
 use std::process;
 use tokio::spawn;
 use url::Url;
@@ -88,12 +87,8 @@ async fn sell(args: SellArgs) -> anyhow::Result<()> {
     let keystore = Path::new(&args.keystore_dir).join(name);
     let wallet = LocalWallet::from_keystore(keystore, password)?;
 
-    let data_path = args
-        .data_path
-        .unwrap_or_else(|| Text::new("File to be sold:").prompt().unwrap());
-    let data = fs::read(data_path)
-        .await
-        .map_err(|e| anyhow!("error reading data: {e}"))?;
+    let proving_key = zkp::read_proving_key(args.encryption_proving_key_path)?;
+
     let rpc_url = Url::parse(&args.rpc_address).map_err(|e| anyhow!("bad rpc address: {e}"))?;
     let eth_provider = Ethereum::new(rpc_url).await;
 
@@ -104,12 +99,27 @@ async fn sell(args: SellArgs) -> anyhow::Result<()> {
         .parse()
         .map_err(|e| anyhow!("error parsing price: {e}"))?;
 
-    let (pk, vk) = Encryption::compile::<PairingEngine, _>(&ENC_PARAMS, &mut rand::thread_rng())?;
+    let mut cipher_host = cipher_host::LocalHost::new(&args.cache_dir);
 
-    println!("writing artifacts...");
-    write_artifacts_json("./", pk.clone(), vk)?;
+    let cfg = SellerConfig {
+        price,
+        cache_dir: PathBuf::from(args.cache_dir),
+    };
+    let (mut seller, to_runtime) =
+        Seller::new(cfg, eth_provider, cipher_host.clone(), wallet, proving_key)?;
 
-    let (seller, to_runtime) = Seller::new(data, price, eth_provider, wallet, pk)?;
+    if !cipher_host.is_hosted().await? {
+        println!("encrypting data and generation proof of encryption...");
+        let data_path = args
+            .data_path
+            .unwrap_or_else(|| Text::new("File to be sold:").prompt().unwrap());
+        let data = fs::read(data_path)
+            .await
+            .map_err(|e| anyhow!("error reading data: {e}"))?;
+        seller.step0_setup(data).await?;
+    } else {
+        println!("encrypted data was restored from cache.");
+    }
 
     spawn(async {
         seller.run().await;
@@ -134,6 +144,16 @@ async fn buy(args: BuyArgs) -> anyhow::Result<()> {
     {
         return Ok(());
     }
+
+    let vk = read_verifying_key(args.encryption_verifying_key_path)?;
+
+    println!("downloading encrypted data...");
+    let (encrypted_data, proof_of_encryption) = client.download().await?;
+    if !verify_proof_of_encryption(&vk, proof_of_encryption, &encrypted_data)? {
+        return Err(anyhow!("seller sent invalid proof of encryption"));
+    }
+    println!("proof of encryption is valid");
+
     let name = args
         .wallet_name
         .unwrap_or_else(|| Text::new("Wallet name:").prompt().unwrap());
@@ -145,8 +165,6 @@ async fn buy(args: BuyArgs) -> anyhow::Result<()> {
     let address = eth_provider.address_from_pk(wallet.pub_key());
     let pub_key = wallet.pub_key().clone();
 
-    let vk = read_verifying_key(args.encryption_verifying_key_path)?;
-
     let mut buyer = Buyer::new(eth_provider, wallet);
 
     let Step1Msg {
@@ -156,7 +174,7 @@ async fn buy(args: BuyArgs) -> anyhow::Result<()> {
         seller_address,
     } = client.step1(address).await?;
 
-    if !buyer.verify_proof_of_encryption(vk, proof_of_encryption, &ciphertext)? {
+    if !verify_proof_of_encryption(&vk, proof_of_encryption, &ciphertext)? {
         return Err(anyhow!("seller sent invalid proof of encryption"));
     }
 
@@ -164,7 +182,7 @@ async fn buy(args: BuyArgs) -> anyhow::Result<()> {
 
     if !args.non_interactive
         && !Confirm::new(&format!(
-            "Data cipher text received. Sign transfer transaction to address 0x{address}? (y/N): "
+            "Encrypted one-time key received. Sign transfer transaction to address 0x{address}? (y/N): "
         ))
         .prompt()
         .unwrap()
@@ -178,7 +196,7 @@ async fn buy(args: BuyArgs) -> anyhow::Result<()> {
 
     let tx_hash = client.step3(pub_key, enc_sig).await?;
 
-    let data = buyer.step4(tx_hash).await?;
+    let data = buyer.step4(tx_hash, encrypted_data).await?;
 
     let data_path = args.data_path.unwrap_or_else(|| {
         Text::new("File decrypted! Where to save the result?:")
@@ -192,6 +210,11 @@ async fn buy(args: BuyArgs) -> anyhow::Result<()> {
     fs::write(data_path, data)
         .await
         .map_err(|e| anyhow!("error writing decrypted data: {e}"))?;
+
+    println!(
+        "find your purchased data at {}",
+        data_path.to_str().unwrap()
+    );
 
     Ok(())
 }

@@ -1,6 +1,7 @@
 #![feature(async_closure)]
 
 mod buyer;
+pub mod cipher_host;
 mod ethereum;
 mod seller;
 mod traits;
