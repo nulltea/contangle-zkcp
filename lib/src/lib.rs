@@ -7,6 +7,7 @@ mod seller;
 mod traits;
 mod utils;
 mod wallet;
+mod zkp;
 
 pub use buyer::*;
 pub use ethereum::*;
@@ -15,22 +16,12 @@ pub use seller::*;
 pub use traits::*;
 pub use utils::*;
 pub use wallet::*;
+pub use zkp::*;
 
-pub use zkp::{Bls12_381 as PairingEngine, JubJub as ProjectiveCurve, JubJubVar as CurveVar};
-
-pub type Encryption = zkp::EncryptCircuit<ProjectiveCurve, CurveVar>;
-
-use zkp::{poseidon, Parameters};
-lazy_static! {
-    pub static ref ENC_PARAMS: Parameters<ProjectiveCurve> = Parameters::<ProjectiveCurve> {
-        n: 1,
-        poseidon: poseidon::get_poseidon_params::<ProjectiveCurve>(2),
-    };
-    pub static ref MULTI_ENC_PARAMS: Parameters<ProjectiveCurve> = Parameters::<ProjectiveCurve> {
-        n: 100,
-        poseidon: poseidon::get_poseidon_params::<ProjectiveCurve>(2),
-    };
-}
+pub use ark_bls12_381::Bls12_381 as PairingEngine;
+pub use ark_ed_on_bls12_381::{
+    constraints::EdwardsVar as CurveVar, EdwardsProjective as ProjectiveCurve, Fq,
+};
 
 #[cfg(test)]
 mod tests {

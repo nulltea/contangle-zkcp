@@ -7,12 +7,13 @@ use anyhow::anyhow;
 use async_std::fs;
 use async_std::path::Path;
 use chrono;
+use circuits::encryption;
 use gumdrop::Options;
 use inquire::{Confirm, Password, Select, Text};
 use scriptless_zkcp::{
-    cipher_host, keypair_from_bip39, keypair_from_hex, keypair_gen, verify_proof_of_encryption,
-    write_to_keystore, CipherDownloader, CipherHost, Encryption, Ethereum, LocalWallet,
-    PairingEngine, Seller, SellerConfig, Step1Msg, ENC_PARAMS,
+    cipher_host, keypair_from_bip39, keypair_from_hex, keypair_gen, write_to_keystore, BuyerConfig,
+    CipherDownloader, CipherHost, Ethereum, LocalWallet, PairingEngine, Seller, SellerConfig,
+    Step1Msg, ZkConfig, ZkEncryption,
 };
 use scriptless_zkcp::{Buyer, ChainProvider};
 use server::client;
@@ -20,7 +21,6 @@ use std::path::PathBuf;
 use std::process;
 use tokio::spawn;
 use url::Url;
-use zkp::{read_verifying_key, write_artifacts_json};
 
 const CHAIN_ID: u64 = 31337;
 
@@ -87,8 +87,6 @@ async fn sell(args: SellArgs) -> anyhow::Result<()> {
     let keystore = Path::new(&args.keystore_dir).join(name);
     let wallet = LocalWallet::from_keystore(keystore, password)?;
 
-    let proving_key = zkp::read_proving_key(args.encryption_proving_key_path)?;
-
     let rpc_url = Url::parse(&args.rpc_address).map_err(|e| anyhow!("bad rpc address: {e}"))?;
     let eth_provider = Ethereum::new(rpc_url).await;
 
@@ -104,9 +102,9 @@ async fn sell(args: SellArgs) -> anyhow::Result<()> {
     let cfg = SellerConfig {
         price,
         cache_dir: PathBuf::from(args.cache_dir),
+        zk: Default::default(),
     };
-    let (mut seller, to_runtime) =
-        Seller::new(cfg, eth_provider, cipher_host.clone(), wallet, proving_key)?;
+    let (mut seller, to_runtime) = Seller::new(cfg, eth_provider, cipher_host.clone(), wallet)?;
 
     if !cipher_host.is_hosted().await? {
         println!("encrypting data and generation proof of encryption...");
@@ -145,15 +143,6 @@ async fn buy(args: BuyArgs) -> anyhow::Result<()> {
         return Ok(());
     }
 
-    let vk = read_verifying_key(args.encryption_verifying_key_path)?;
-
-    println!("downloading encrypted data...");
-    let (encrypted_data, proof_of_encryption) = client.download().await?;
-    if !verify_proof_of_encryption(&vk, proof_of_encryption, &encrypted_data)? {
-        return Err(anyhow!("seller sent invalid proof of encryption"));
-    }
-    println!("proof of encryption is valid");
-
     let name = args
         .wallet_name
         .unwrap_or_else(|| Text::new("Wallet name:").prompt().unwrap());
@@ -165,7 +154,17 @@ async fn buy(args: BuyArgs) -> anyhow::Result<()> {
     let address = eth_provider.address_from_pk(wallet.pub_key());
     let pub_key = wallet.pub_key().clone();
 
-    let mut buyer = Buyer::new(eth_provider, wallet);
+    let cfg = BuyerConfig {
+        zk: Default::default(),
+    };
+    let mut buyer = Buyer::new(cfg, eth_provider, wallet);
+
+    println!("downloading encrypted data...");
+    let (encrypted_data, proof_of_encryption) = client.download().await?;
+    if !buyer.step0_verify(&encrypted_data, proof_of_encryption)? {
+        return Err(anyhow!("seller sent invalid proof of data encryption"));
+    }
+    println!("proof of encryption is valid");
 
     let Step1Msg {
         ciphertext,
@@ -174,25 +173,26 @@ async fn buy(args: BuyArgs) -> anyhow::Result<()> {
         seller_address,
     } = client.step1(address).await?;
 
-    if !verify_proof_of_encryption(&vk, proof_of_encryption, &ciphertext)? {
-        return Err(anyhow!("seller sent invalid proof of encryption"));
-    }
-
-    // todo: cache ciphertext, data_pk, buyer_address.
+    // todo: cache ciphertext and data_pk.
+    let enc_sig = buyer
+        .step2(
+            &ciphertext,
+            proof_of_encryption,
+            &data_pk,
+            seller_address,
+            price,
+        )
+        .await?;
 
     if !args.non_interactive
         && !Confirm::new(&format!(
-            "Encrypted one-time key received. Sign transfer transaction to address 0x{address}? (y/N): "
-        ))
+        "Encrypted one-time key received. Sign transfer transaction to address 0x{address}? (y/N): "
+    ))
         .prompt()
         .unwrap()
     {
         return Ok(());
     }
-
-    let enc_sig = buyer
-        .step2(&ciphertext, &data_pk, seller_address, price)
-        .await?;
 
     let tx_hash = client.step3(pub_key, enc_sig).await?;
 
@@ -222,7 +222,7 @@ async fn buy(args: BuyArgs) -> anyhow::Result<()> {
 async fn compile(args: CompileArgs) -> anyhow::Result<()> {
     let cipher_host = cipher_host::LocalHost::new(&args.cache_dir);
 
-    if !cipher_host.is_hosted().await.unwrap() || !Confirm::new(&format!(
+    if cipher_host.is_hosted().await.unwrap() && !Confirm::new(&format!(
         "Proof of encryption cache found. Recompiling circuit will cause it becoming broken. Continue? (y/N): "
     ))
         .prompt()
@@ -231,11 +231,23 @@ async fn compile(args: CompileArgs) -> anyhow::Result<()> {
         return Ok(())
     }
 
-    println!("compiling circuit...");
-    let (pk, vk) = Encryption::compile::<PairingEngine, _>(&ENC_PARAMS, &mut rand::thread_rng())?;
+    let build_dir = PathBuf::from(args.build_dir);
+    let cfg = ZkConfig {
+        data_encryption_dir: build_dir.join("data_encryption"),
+        data_encryption_limit: args.limit_data_enc_dir,
+        key_encryption_dir: build_dir.join("key_encryption"),
+    };
 
-    println!("writing artifacts...");
-    write_artifacts_json(args.cache_dir, pk, vk)?;
+    println!("compiling data encryption circuit...");
+    let data_encryption = ZkEncryption::new(
+        &cfg.data_encryption_dir,
+        encryption::Parameters::default_multi(cfg.data_encryption_limit),
+    );
+    let _ = data_encryption.compile(&mut rand::thread_rng())?;
+
+    println!("compiling key encryption circuit...");
+    let key_encryption = ZkEncryption::new(&cfg.key_encryption_dir, Default::default());
+    let _ = key_encryption.compile(&mut rand::thread_rng())?;
 
     println!("done!");
     Ok(())

@@ -9,41 +9,6 @@ use std::fs;
 use std::io::{BufReader, BufWriter, Read, Write};
 use std::path::Path;
 
-pub fn write_artifacts_json<P: AsRef<Path>, E: PairingEngine>(
-    path: P,
-    pk: ProvingKey<E>,
-    vk: VerifyingKey<E>,
-) -> anyhow::Result<()> {
-    let mut pk_buf = vec![];
-    pk.serialize_unchecked(&mut pk_buf)
-        .map_err(|e| anyhow!("error encoding proving key"))?;
-
-    let mut vk_buf = ark_to_bytes(vk).map_err(|e| anyhow!("error encoding verifying key"))?;
-
-    fs::write(path.as_ref().join("circuit.pk"), pk_buf)
-        .map_err(|e| anyhow!("error writing proving key: {e}"))?;
-    fs::write(path.as_ref().join("circuit.vk"), vk_buf)
-        .map_err(|e| anyhow!("error writing verifying key: {e}"))?;
-
-    Ok(())
-}
-
-pub fn read_proving_key<P: AsRef<Path>, E: PairingEngine>(
-    path: P,
-) -> anyhow::Result<ProvingKey<E>> {
-    let mut buf = fs::read(path.as_ref()).map_err(|e| anyhow!("error reading proving key: {e}"))?;
-    ProvingKey::<E>::deserialize_unchecked(&*buf)
-        .map_err(|e| anyhow!("error decoding proving key: {e}"))
-}
-
-pub fn read_verifying_key<P: AsRef<Path>, E: PairingEngine>(
-    path: P,
-) -> anyhow::Result<VerifyingKey<E>> {
-    let mut pk_buf =
-        fs::read(path.as_ref()).map_err(|e| anyhow!("error reading verifying key: {e}"))?;
-    ark_from_bytes(&*pk_buf).map_err(|e| anyhow!("error decoding verifying key: {e}"))
-}
-
 pub fn ark_from_bytes<B: AsRef<[u8]>, O: CanonicalDeserialize>(
     bytes: B,
 ) -> Result<O, SerializationError> {

@@ -1,7 +1,7 @@
 #![feature(inherent_associated_types)]
 extern crate core;
 
-mod encryption;
+pub mod encryption;
 mod parameters;
 pub mod poseidon;
 mod utils;
@@ -13,5 +13,3 @@ pub use ark_ed_on_bls12_381::{constraints::EdwardsVar as JubJubVar, EdwardsProje
 
 pub use ark_bls12_381::Bls12_381;
 pub use ark_bw6_761::BW6_761;
-
-pub use ark_groth16::{Proof, ProvingKey, VerifyingKey};

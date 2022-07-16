@@ -3,6 +3,6 @@
 members = [
     "cmd",
     "lib",
-    "zkp",
+    "circuits",
     "server"
 ]

@@ -1,7 +1,5 @@
 use crate::traits::ChainProvider;
-use crate::{
-    keypair_from_bytes, CipherHost, Encryption, PairingEngine, ProjectiveCurve, ENC_PARAMS,
-};
+use crate::{keypair_from_bytes, CipherHost, PairingEngine, ProjectiveCurve};
 use anyhow::anyhow;
 use ecdsa_fun::adaptor::{Adaptor, EncryptedSignature, HashTranscript};
 use ethers::prelude::*;
@@ -18,7 +16,8 @@ use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
-use zkp::{ark_to_bytes, bytes_to_plaintext_chunks, read_verifying_key, ProvingKey};
+use crate::zkp::{ZkConfig, ZkEncryption};
+use circuits::{ark_to_bytes, bytes_to_plaintext_chunks, encryption};
 
 pub struct Seller<TChainProvider, TCipherHost> {
     cfg: SellerConfig,
@@ -29,7 +28,8 @@ pub struct Seller<TChainProvider, TCipherHost> {
     from_buyers: mpsc::Receiver<SellerMsg>,
     one_time_keys: HashMap<Address, Scalar>,
     decryption_key: Option<Vec<u8>>,
-    circuit_pk: ProvingKey<PairingEngine>,
+    data_encryption: ZkEncryption,
+    key_encryption: ZkEncryption,
 }
 
 pub enum SellerMsg {
@@ -67,6 +67,7 @@ pub struct Step1Msg {
 pub struct SellerConfig {
     pub price: f64,
     pub cache_dir: PathBuf,
+    pub zk: ZkConfig,
 }
 
 impl<TChainProvider: ChainProvider, TCipherHost: CipherHost> Seller<TChainProvider, TCipherHost> {
@@ -75,14 +76,17 @@ impl<TChainProvider: ChainProvider, TCipherHost: CipherHost> Seller<TChainProvid
         chain: TChainProvider,
         cipher_host: TCipherHost,
         wallet: crate::LocalWallet,
-        circuit_pk: ProvingKey<PairingEngine>,
     ) -> anyhow::Result<(Self, mpsc::Sender<SellerMsg>)> {
         let nonce_gen = Deterministic::<Sha256>::default();
         let adaptor = Adaptor::<HashTranscript<Sha256, ChaCha20Rng>, _>::new(nonce_gen);
         let (to_seller, from_buyers) = mpsc::channel(1);
         let decryption_key =
             fs::read(cfg.cache_dir.join("decryption_key")).map_or(None, |b| Some(b));
-
+        let data_encryption = ZkEncryption::new(
+            &cfg.zk.data_encryption_dir,
+            encryption::Parameters::default_multi(cfg.zk.data_encryption_limit),
+        );
+        let key_encryption = ZkEncryption::new(&cfg.zk.key_encryption_dir, Default::default());
         Ok((
             Self {
                 cfg,
@@ -92,15 +96,16 @@ impl<TChainProvider: ChainProvider, TCipherHost: CipherHost> Seller<TChainProvid
                 cipher_host,
                 from_buyers,
                 wallet,
-                circuit_pk,
                 decryption_key,
+                data_encryption,
+                key_encryption,
             },
             to_seller,
         ))
     }
 
     pub async fn step0_setup(&mut self, data: Vec<u8>) -> anyhow::Result<()> {
-        let (sk, pk) = Encryption::keygen(&ENC_PARAMS, &mut rand::thread_rng())?;
+        let (sk, pk) = self.data_encryption.keygen(&mut rand::thread_rng())?;
 
         let sk_bytes =
             ark_to_bytes(sk).map_err(|e| anyhow!("error encoding elgamal secret key: {e}"))?;
@@ -113,7 +118,8 @@ impl<TChainProvider: ChainProvider, TCipherHost: CipherHost> Seller<TChainProvid
         .map_err(|e| anyhow!("error caching decryption key: {e}"))?;
 
         let (encrypted_data, proof_of_encryption) =
-            encrypt(&*data, pk, &self.circuit_pk, &mut rand::thread_rng())?;
+            self.data_encryption
+                .encrypt(data, pk, &mut rand::thread_rng())?;
 
         let _ = self
             .cipher_host
@@ -136,7 +142,9 @@ impl<TChainProvider: ChainProvider, TCipherHost: CipherHost> Seller<TChainProvid
                         )); // todo: DoS defense needed.
                     }
                     SellerMsg::Step1 { address, resp_tx } => {
-                        let (elgamal_pk, data_sk, data_pk) = Self::elgamal_gen_derive_secp256k1()
+                        let (elgamal_pk, data_sk, data_pk) = self
+                            .key_encryption
+                            .keygen_derive(&mut rand::thread_rng())
                             .expect("expected generation to succeed or infinite looped");
                         let _ = self.one_time_keys.insert(address, data_sk);
                         let seller_address = self.chain.address_from_pk(self.wallet.pub_key());
@@ -145,20 +153,14 @@ impl<TChainProvider: ChainProvider, TCipherHost: CipherHost> Seller<TChainProvid
                             .as_ref()
                             .expect("decryption key was expected");
                         if let Err(_) = resp_tx.send(
-                            encrypt(
-                                plaintext,
-                                elgamal_pk,
-                                &self.circuit_pk,
-                                &mut rand::thread_rng(),
-                            )
-                            .map(
-                                |(ciphertext, proof_of_encryption)| Step1Msg {
+                            self.key_encryption
+                                .encrypt(plaintext, elgamal_pk, &mut rand::thread_rng())
+                                .map(|(ciphertext, proof_of_encryption)| Step1Msg {
                                     ciphertext,
                                     proof_of_encryption,
                                     data_pk,
                                     seller_address,
-                                },
-                            ),
+                                }),
                         ) {
                             self.one_time_keys.remove(&address); // todo: DoS defense needed.
                         }
@@ -202,41 +204,4 @@ impl<TChainProvider: ChainProvider, TCipherHost: CipherHost> Seller<TChainProvid
             }
         }
     }
-
-    fn elgamal_gen_derive_secp256k1(
-    ) -> anyhow::Result<(zkp::PublicKey<ProjectiveCurve>, Scalar, Point)> {
-        loop {
-            let (elgamal_sk, elgamal_pk) =
-                Encryption::keygen(&ENC_PARAMS, &mut rand::thread_rng())?;
-
-            let elgamal_sk_bytes = ark_to_bytes(elgamal_sk)
-                .map_err(|e| anyhow!("error encoding elgamal secret key: {e}"))?;
-
-            match keypair_from_bytes(elgamal_sk_bytes) {
-                Ok((secp_sk, secp_pk)) => return Ok((elgamal_pk, secp_sk, secp_pk)),
-                Err(_) => continue,
-            }
-        }
-    }
-}
-
-pub fn encrypt<R: Rng + CryptoRng>(
-    plaintext: &[u8],
-    pk: zkp::PublicKey<ProjectiveCurve>,
-    proving_key: &ProvingKey<PairingEngine>,
-    mut rng: &mut R,
-) -> anyhow::Result<(Vec<u8>, Vec<u8>)> {
-    let mut msg = bytes_to_plaintext_chunks::<ProjectiveCurve, _>(&plaintext)
-        .map_err(|e| anyhow!("error casting plaintext: {e}"))?;
-
-    let encrypt = Encryption::new(pk, msg, &ENC_PARAMS, rng)
-        .map_err(|e| anyhow!("error encrypting data: {e}"))?;
-    let (ciphertext, proof) = encrypt.prove(proving_key, &mut rng)?;
-
-    let ciphertext_encoded =
-        ark_to_bytes(ciphertext.clone()).map_err(|e| anyhow!("error encoding ciphertext: {e}"))?;
-
-    let proof_encoded = ark_to_bytes(proof)?;
-
-    Ok((ciphertext_encoded, proof_encoded))
 }
