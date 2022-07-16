@@ -14,7 +14,9 @@ pub fn write_artifacts_json<P: AsRef<Path>, E: PairingEngine>(
     pk: ProvingKey<E>,
     vk: VerifyingKey<E>,
 ) -> anyhow::Result<()> {
-    let mut pk_buf = ark_to_bytes(pk).map_err(|e| anyhow!("error encoding proving key"))?;
+    let mut pk_buf = vec![];
+    pk.serialize_unchecked(&mut pk_buf)
+        .map_err(|e| anyhow!("error encoding proving key"))?;
 
     let mut vk_buf = ark_to_bytes(vk).map_err(|e| anyhow!("error encoding verifying key"))?;
 
@@ -30,7 +32,8 @@ pub fn read_proving_key<P: AsRef<Path>, E: PairingEngine>(
     path: P,
 ) -> anyhow::Result<ProvingKey<E>> {
     let mut buf = fs::read(path.as_ref()).map_err(|e| anyhow!("error reading proving key: {e}"))?;
-    ark_from_bytes(buf).map_err(|e| anyhow!("error decoding proving key: {e}"))
+    ProvingKey::<E>::deserialize_unchecked(&*buf)
+        .map_err(|e| anyhow!("error decoding proving key: {e}"))
 }
 
 pub fn read_verifying_key<P: AsRef<Path>, E: PairingEngine>(

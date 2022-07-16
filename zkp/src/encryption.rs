@@ -236,7 +236,7 @@ where
 
         c1.enforce_equal(&ciphertext.0)?;
 
-        let res = plaintext
+        plaintext
             .into_iter()
             .map(|m| dh.clone() + m)
             .zip(ciphertext.1.iter())
@@ -245,9 +245,7 @@ where
                 c2.conditional_enforce_equal(&exp, &is_not_empty)
             })
             .collect::<Result<Vec<_>, _>>()
-            .map(|_| ());
-
-        res
+            .map(|_| ())
     }
 
     pub(crate) fn ciphertext_var(
@@ -331,30 +329,35 @@ mod test {
     use ark_bls12_381::Bls12_381 as E;
     use ark_ec::ProjectiveCurve;
     use ark_ed_on_bls12_381::{
-        constraints::EdwardsVar, EdwardsProjective as JubJub, Fq, Fr, FrParameters,
+        constraints::EdwardsVar as CurveVar, EdwardsProjective as Curve, Fq, Fr, FrParameters,
     };
+    // use ark_bls12_377::{
+    //     constraints::G1Var as CurveVar, Fq, Fr, FrParameters, G1Projective as Curve,
+    // };
+    // use ark_bw6_761::BW6_761 as E;
     use ark_ff::{
         BigInteger, BigInteger256, Field, Fp256, One, PrimeField, ToConstraintField, Zero,
     };
-    use ark_groth16::Groth16;
+    use ark_groth16::{Groth16, ProvingKey};
     use ark_nonnative_field::NonNativeFieldVar;
     use ark_r1cs_std::fields::fp::FpVar;
     use ark_r1cs_std::prelude::{AllocVar, AllocationMode, Boolean, EqGadget, FieldVar};
     use ark_r1cs_std::{R1CSVar, ToBytesGadget, ToConstraintFieldGadget};
     use ark_relations::r1cs::{ConstraintSynthesizer, ConstraintSystem};
+    use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
     use ark_snark::{CircuitSpecificSetupSNARK, SNARK};
     use ark_sponge::constraints::AbsorbGadget;
     use ark_std::{test_rng, UniformRand};
     use std::borrow::Borrow;
 
-    type TestEnc = EncryptCircuit<JubJub, EdwardsVar>;
+    type TestEnc = EncryptCircuit<Curve, CurveVar>;
 
     #[test]
     fn test_elgamal_encryption() {
         let mut rng = test_rng();
-        let params = &Parameters::<JubJub> {
+        let params = &Parameters::<Curve> {
             n: 1,
-            poseidon: poseidon::get_poseidon_params::<JubJub>(2),
+            poseidon: poseidon::get_poseidon_params::<Curve>(2),
         };
 
         let bytes = [1, 2, 3];
@@ -376,9 +379,9 @@ mod test {
         let bytes = [1, 2, 3];
         let msg = vec![Fq::from_random_bytes(&bytes).unwrap()];
 
-        let params = &Parameters::<JubJub> {
-            n: 10,
-            poseidon: poseidon::get_poseidon_params::<JubJub>(2),
+        let params = &Parameters::<Curve> {
+            n: 1,
+            poseidon: poseidon::get_poseidon_params::<Curve>(2),
         };
         let (_, pub_key) = TestEnc::keygen(params, &mut rng).unwrap();
 
@@ -403,9 +406,9 @@ mod test {
     fn test_elgamal_keygen() {
         let mut rng = test_rng();
 
-        let params = &Parameters::<JubJub> {
+        let params = &Parameters::<Curve> {
             n: 1,
-            poseidon: poseidon::get_poseidon_params::<JubJub>(2),
+            poseidon: poseidon::get_poseidon_params::<Curve>(2),
         };
 
         let (sk, pk) = TestEnc::keygen(params, &mut rng).unwrap();

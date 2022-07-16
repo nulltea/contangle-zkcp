@@ -104,6 +104,9 @@ pub struct BuyArgs {
 pub struct CompileArgs {
     help: bool,
 
-    #[options(help = "path to write circuit artifacts", default = "./")]
-    pub output_dir: String,
+    #[options(
+        help = "path to the directory where cache is stored",
+        default = "./cache"
+    )]
+    pub cache_dir: String,
 }

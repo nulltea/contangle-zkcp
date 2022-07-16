@@ -220,11 +220,22 @@ async fn buy(args: BuyArgs) -> anyhow::Result<()> {
 }
 
 async fn compile(args: CompileArgs) -> anyhow::Result<()> {
+    let cipher_host = cipher_host::LocalHost::new(&args.cache_dir);
+
+    if !cipher_host.is_hosted().await.unwrap() || !Confirm::new(&format!(
+        "Proof of encryption cache found. Recompiling circuit will cause it becoming broken. Continue? (y/N): "
+    ))
+        .prompt()
+        .unwrap()
+    {
+        return Ok(())
+    }
+
     println!("compiling circuit...");
     let (pk, vk) = Encryption::compile::<PairingEngine, _>(&ENC_PARAMS, &mut rand::thread_rng())?;
 
     println!("writing artifacts...");
-    write_artifacts_json(args.output_dir, pk, vk)?;
+    write_artifacts_json(args.cache_dir, pk, vk)?;
 
     println!("done!");
     Ok(())
