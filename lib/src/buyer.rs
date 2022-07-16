@@ -1,14 +1,15 @@
 use crate::traits::ChainProvider;
-use crate::{CipherHost, Encryption, PairingEngine, ProjectiveCurve, ENC_PARAMS};
+use crate::zkp::{ZkConfig, ZkEncryption};
+use crate::{CipherHost, PairingEngine, ProjectiveCurve};
 use anyhow::anyhow;
 use backoff::ExponentialBackoff;
+use circuits::{ark_from_bytes, encryption, plaintext_chunks_to_bytes, SecretKey};
 use ecdsa_fun::adaptor::{Adaptor, EncryptedSignature, HashTranscript};
 use ethers::prelude::{Address, H256};
 use rand_chacha::ChaCha20Rng;
 use secp256kfun::nonce::Deterministic;
 use secp256kfun::{Point, Scalar};
 use sha2::Sha256;
-use zkp::{ark_from_bytes, plaintext_chunks_to_bytes, SecretKey, VerifyingKey};
 
 pub struct Buyer<TChainProvider> {
     chain: TChainProvider,
@@ -17,12 +18,25 @@ pub struct Buyer<TChainProvider> {
     encrypted_key: Option<Vec<u8>>,
     one_time_pk: Option<Point>,
     encrypted_sig: Option<EncryptedSignature>,
+    data_encryption: ZkEncryption,
+    key_encryption: ZkEncryption,
+}
+
+#[derive(Clone, Debug)]
+pub struct BuyerConfig {
+    pub zk: ZkConfig,
 }
 
 impl<TChainProvider: ChainProvider> Buyer<TChainProvider> {
-    pub fn new(chain: TChainProvider, wallet: crate::LocalWallet) -> Self {
+    pub fn new(cfg: BuyerConfig, chain: TChainProvider, wallet: crate::LocalWallet) -> Self {
         let nonce_gen = Deterministic::<Sha256>::default();
         let adaptor = Adaptor::<HashTranscript<Sha256, ChaCha20Rng>, _>::new(nonce_gen);
+        let data_encryption = ZkEncryption::new_verifier(
+            &cfg.zk.data_encryption_dir,
+            encryption::Parameters::default_multi(cfg.zk.data_encryption_limit),
+        );
+        let key_encryption =
+            ZkEncryption::new_verifier(&cfg.zk.key_encryption_dir, Default::default());
 
         Self {
             chain,
@@ -31,18 +45,34 @@ impl<TChainProvider: ChainProvider> Buyer<TChainProvider> {
             encrypted_key: None,
             one_time_pk: None,
             encrypted_sig: None,
+            data_encryption,
+            key_encryption,
         }
+    }
+
+    /// Step 0: Bob verifies data ciphertext.
+    pub fn step0_verify<CB: AsRef<[u8]>, PB: AsRef<[u8]>>(
+        &self,
+        encrypted_data: CB,
+        proof: PB,
+    ) -> anyhow::Result<bool> {
+        self.data_encryption.verify_proof(proof, encrypted_data)
     }
 
     /// Step 2: Bob signs a transaction to transfer coins to Alice address
     /// and encrypts it with `data_pk` and sends it to Alice.
-    pub async fn step2<B: AsRef<[u8]>>(
+    pub async fn step2<KB: AsRef<[u8]>, PB: AsRef<[u8]>>(
         &mut self,
-        encrypted_key: B,
+        encrypted_key: KB,
+        proof: PB,
         one_time_pk: &Point,
         addr_to: Address,
         amount: f64,
     ) -> anyhow::Result<EncryptedSignature> {
+        if !self.key_encryption.verify_proof(proof, &encrypted_key)? {
+            return Err(anyhow!("seller sent invalid proof of key encryption"));
+        }
+
         let _ = self.encrypted_key.insert(encrypted_key.as_ref().to_vec());
         let _ = self.one_time_pk.insert(one_time_pk.clone());
         let (_, tx_hash) = self.chain.compose_tx(
@@ -87,29 +117,9 @@ impl<TChainProvider: ChainProvider> Buyer<TChainProvider> {
             )
             .unwrap();
 
-        let decryption_key = decrypt(recovered_sk.to_bytes(), self.encrypted_key.take().unwrap())?;
-        decrypt(decryption_key, encrypted_data)
+        let decryption_key = self
+            .key_encryption
+            .decrypt(recovered_sk.to_bytes(), self.encrypted_key.take().unwrap())?;
+        self.data_encryption.decrypt(decryption_key, encrypted_data)
     }
-}
-
-pub fn verify_proof_of_encryption(
-    vk: &VerifyingKey<PairingEngine>,
-    proof: Vec<u8>,
-    ciphertext: &[u8],
-) -> anyhow::Result<bool> {
-    let proof_of_encryption = ark_from_bytes(proof)?;
-    let ciphertext_var =
-        ark_from_bytes(&ciphertext).map_err(|_e| anyhow!("error casting ciphertext"))?;
-
-    Encryption::verify_proof::<PairingEngine>(vk, proof_of_encryption, ciphertext_var, &ENC_PARAMS)
-}
-
-pub fn decrypt<K: AsRef<[u8]>, B: AsRef<[u8]>>(sk: K, ciphertext: B) -> anyhow::Result<Vec<u8>> {
-    let sk: SecretKey<ProjectiveCurve> =
-        ark_from_bytes(sk.as_ref()).map_err(|e| anyhow!("error casting secret key: {e}"))?;
-    let ciphertext = ark_from_bytes(ciphertext.as_ref())
-        .map_err(|e| anyhow!("error casting ciphertext: {e}"))?;
-    let plaintext = Encryption::decrypt(ciphertext, sk, &ENC_PARAMS)?;
-    plaintext_chunks_to_bytes::<ProjectiveCurve>(plaintext)
-        .map_err(|e| anyhow!("error casting plaintext: {e}"))
 }

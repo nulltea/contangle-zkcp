@@ -1,3 +1,4 @@
+use crate::poseidon::get_poseidon_params;
 use anyhow::anyhow;
 use ark_crypto_primitives::snark::NonNativeFieldInputVar;
 use ark_crypto_primitives::Error;
@@ -24,6 +25,8 @@ use ark_std::vec::Vec;
 use ark_std::UniformRand;
 use std::borrow::Borrow;
 use std::cmp::Ordering;
+use std::fmt::Debug;
+use std::str::FromStr;
 
 pub struct EncryptCircuit<C, CV>
 where
@@ -42,10 +45,36 @@ where
 #[derive(Clone, Debug)]
 pub struct Parameters<C: ProjectiveCurve>
 where
-    <C as ProjectiveCurve>::BaseField: PrimeField,
+    C::BaseField: PrimeField,
 {
     pub n: usize,
     pub poseidon: PoseidonParameters<C::BaseField>,
+}
+
+impl<C: ProjectiveCurve> Parameters<C>
+where
+    C::BaseField: PrimeField,
+    <C::BaseField as FromStr>::Err: Debug,
+{
+    pub fn default_multi(n: usize) -> Self {
+        Self {
+            n,
+            poseidon: get_poseidon_params::<C>(2),
+        }
+    }
+}
+
+impl<C: ProjectiveCurve> Default for Parameters<C>
+where
+    C::BaseField: PrimeField,
+    <C::BaseField as FromStr>::Err: Debug,
+{
+    fn default() -> Self {
+        Self {
+            n: 1,
+            poseidon: get_poseidon_params::<C>(2),
+        }
+    }
 }
 
 pub type PublicKey<C> = C;
@@ -76,41 +105,25 @@ where
     pub fn new<R: Rng>(
         pk: PublicKey<C>,
         msg: Plaintext<C>,
-        params: &Parameters<C>,
+        params: Parameters<C>,
         rng: &mut R,
-    ) -> Result<Self, Error> {
+    ) -> anyhow::Result<Self> {
         let r = Randomness::rand(rng);
 
-        let enc = Self::encrypt(&pk, &msg, &r, params)?;
+        let enc = Self::encrypt(&pk, &msg, &r, &params)
+            .map_err(|e| anyhow!("error encrypting message: {e}"))?;
 
         Ok(Self {
             r,
             msg,
             pk,
             enc,
-            params: params.clone(),
+            params,
             _curve_var: PhantomData,
         })
     }
 
-    pub fn compile<E: PairingEngine, R>(
-        params: &Parameters<C>,
-        mut rng: &mut R,
-    ) -> anyhow::Result<(ProvingKey<E>, VerifyingKey<E>)>
-    where
-        R: CryptoRng + RngCore,
-        Self: ConstraintSynthesizer<E::Fr>,
-    {
-        let pk = C::rand(&mut rng);
-        let msg = vec![C::BaseField::from_random_bytes(&*vec![]).unwrap()];
-        let c = Self::new(pk, msg, params, &mut rng).unwrap();
-        let (pk, vk) = Groth16::<E>::setup(c, &mut rng)
-            .map_err(|e| anyhow!("error compiling circuit: {e}"))?;
-        Ok((pk, vk))
-    }
-
     pub fn keygen<R: CryptoRng + RngCore>(
-        params: &Parameters<C>,
         mut rng: &mut R,
     ) -> anyhow::Result<(SecretKey<C>, PublicKey<C>)> {
         // get a random element from the scalar field
@@ -186,22 +199,6 @@ where
         Ok(c2.into_iter().map(|c2i| c2i - dh).collect())
     }
 
-    pub fn prove<E: PairingEngine, R>(
-        self,
-        pk: &ProvingKey<E>,
-        mut rng: &mut R,
-    ) -> anyhow::Result<(Ciphertext<C>, Proof<E>)>
-    where
-        R: CryptoRng + RngCore,
-        Self: ConstraintSynthesizer<E::Fr>,
-    {
-        let ciphertext = self.enc.clone();
-        let proof = Groth16::<E>::prove(pk, self, &mut rng)
-            .map_err(|e| anyhow!("error proving encryption: {e}"))?;
-
-        Ok((ciphertext, proof))
-    }
-
     pub(crate) fn verify_encryption(
         &self,
         cs: ConstraintSystemRef<C::BaseField>,
@@ -236,7 +233,7 @@ where
 
         c1.enforce_equal(&ciphertext.0)?;
 
-        let res = plaintext
+        plaintext
             .into_iter()
             .map(|m| dh.clone() + m)
             .zip(ciphertext.1.iter())
@@ -245,9 +242,7 @@ where
                 c2.conditional_enforce_equal(&exp, &is_not_empty)
             })
             .collect::<Result<Vec<_>, _>>()
-            .map(|_| ());
-
-        res
+            .map(|_| ())
     }
 
     pub(crate) fn ciphertext_var(
@@ -331,40 +326,46 @@ mod test {
     use ark_bls12_381::Bls12_381 as E;
     use ark_ec::ProjectiveCurve;
     use ark_ed_on_bls12_381::{
-        constraints::EdwardsVar, EdwardsProjective as JubJub, Fq, Fr, FrParameters,
+        constraints::EdwardsVar as CurveVar, EdwardsProjective as Curve, Fq, Fr, FrParameters,
     };
+    // use ark_bls12_377::{
+    //     constraints::G1Var as CurveVar, Fq, Fr, FrParameters, G1Projective as Curve,
+    // };
+    // use ark_bw6_761::BW6_761 as E;
     use ark_ff::{
         BigInteger, BigInteger256, Field, Fp256, One, PrimeField, ToConstraintField, Zero,
     };
-    use ark_groth16::Groth16;
+    use ark_groth16::{Groth16, ProvingKey};
     use ark_nonnative_field::NonNativeFieldVar;
     use ark_r1cs_std::fields::fp::FpVar;
     use ark_r1cs_std::prelude::{AllocVar, AllocationMode, Boolean, EqGadget, FieldVar};
     use ark_r1cs_std::{R1CSVar, ToBytesGadget, ToConstraintFieldGadget};
     use ark_relations::r1cs::{ConstraintSynthesizer, ConstraintSystem};
+    use ark_serialize::{CanonicalDeserialize, CanonicalSerialize};
     use ark_snark::{CircuitSpecificSetupSNARK, SNARK};
     use ark_sponge::constraints::AbsorbGadget;
     use ark_std::{test_rng, UniformRand};
     use std::borrow::Borrow;
 
-    type TestEnc = EncryptCircuit<JubJub, EdwardsVar>;
+    type TestEnc = EncryptCircuit<Curve, CurveVar>;
 
     #[test]
     fn test_elgamal_encryption() {
         let mut rng = test_rng();
-        let params = &Parameters::<JubJub> {
+        let params = Parameters::<Curve> {
             n: 1,
-            poseidon: poseidon::get_poseidon_params::<JubJub>(2),
+            poseidon: poseidon::get_poseidon_params::<Curve>(2),
         };
 
         let bytes = [1, 2, 3];
         let msg = Fq::from_random_bytes(&bytes).unwrap();
 
-        let (sk, pk) = TestEnc::keygen(params, &mut rng).unwrap();
+        let (sk, pk) = TestEnc::keygen(&mut rng).unwrap();
 
-        let circuit = TestEnc::new(pk.clone(), vec![msg.clone()], params, &mut rng).unwrap();
+        let circuit =
+            TestEnc::new(pk.clone(), vec![msg.clone()], params.clone(), &mut rng).unwrap();
 
-        let plaintext = TestEnc::decrypt(circuit.enc, sk, params).unwrap();
+        let plaintext = TestEnc::decrypt(circuit.enc, sk, &params).unwrap();
 
         assert_eq!(vec![msg], plaintext);
     }
@@ -376,26 +377,38 @@ mod test {
         let bytes = [1, 2, 3];
         let msg = vec![Fq::from_random_bytes(&bytes).unwrap()];
 
-        let params = &Parameters::<JubJub> {
-            n: 10,
-            poseidon: poseidon::get_poseidon_params::<JubJub>(2),
+        let params = Parameters::<Curve> {
+            n: 1,
+            poseidon: poseidon::get_poseidon_params::<Curve>(2),
         };
-        let (_, pub_key) = TestEnc::keygen(params, &mut rng).unwrap();
+        let (_, pub_key) = TestEnc::keygen(&mut rng).unwrap();
 
-        let circuit = TestEnc::new(pub_key.clone(), msg.clone().into(), params, &mut rng).unwrap();
+        let circuit = TestEnc::new(
+            pub_key.clone(),
+            msg.clone().into(),
+            params.clone(),
+            &mut rng,
+        )
+        .unwrap();
         let cs = ConstraintSystem::<Fq>::new_ref();
         circuit.generate_constraints(cs.clone()).unwrap();
         println!("Num constraints: {}", cs.num_constraints());
         assert!(cs.is_satisfied().unwrap());
 
-        let circuit = TestEnc::new(pub_key.clone(), msg.clone().into(), params, &mut rng).unwrap();
+        let circuit = TestEnc::new(
+            pub_key.clone(),
+            msg.clone().into(),
+            params.clone(),
+            &mut rng,
+        )
+        .unwrap();
         let (pk, vk) = Groth16::<E>::setup(circuit, &mut rng).unwrap();
 
-        let circuit = TestEnc::new(pub_key, msg.clone().into(), params, &mut rng).unwrap();
+        let circuit = TestEnc::new(pub_key, msg.clone().into(), params.clone(), &mut rng).unwrap();
         let enc = circuit.enc.clone();
         let proof = Groth16::prove(&pk, circuit, &mut rng).unwrap();
 
-        let valid_proof = TestEnc::verify_proof(&vk, proof, enc, params).unwrap();
+        let valid_proof = TestEnc::verify_proof(&vk, proof, enc, &params).unwrap();
         assert!(valid_proof);
     }
 
@@ -403,12 +416,7 @@ mod test {
     fn test_elgamal_keygen() {
         let mut rng = test_rng();
 
-        let params = &Parameters::<JubJub> {
-            n: 1,
-            poseidon: poseidon::get_poseidon_params::<JubJub>(2),
-        };
-
-        let (sk, pk) = TestEnc::keygen(params, &mut rng).unwrap();
+        let (sk, pk) = TestEnc::keygen(&mut rng).unwrap();
 
         let pk_bytes = ark_to_bytes(pk).unwrap();
         let sk_bytes = ark_to_bytes(sk.0).unwrap();

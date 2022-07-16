@@ -13,9 +13,9 @@ impl LocalHost {
     pub fn new<P: AsRef<Path>>(dir: P) -> Self {
         std::fs::create_dir_all(dir.as_ref()).expect("expected dir to be created");
 
-        return Self {
+        Self {
             directory: PathBuf::from(dir.as_ref()),
-        };
+        }
     }
 }
 
@@ -40,11 +40,41 @@ impl CipherHost for LocalHost {
             .await
             .map_err(|e| anyhow!("error reading proof-of-encryption from local director: {e}"))?;
 
-        return Ok((cipher, proof));
+        Ok((cipher, proof))
     }
 
     async fn is_hosted(&self) -> anyhow::Result<bool> {
         Ok(self.directory.join("ciphertext").exists()
             && self.directory.join("proof_of_encryption").exists())
+    }
+}
+
+#[derive(Clone)]
+pub struct EphemeralHost {
+    ciphertext_and_proof: Option<(Vec<u8>, Vec<u8>)>,
+}
+
+impl EphemeralHost {
+    pub fn new() -> Self {
+        Self {
+            ciphertext_and_proof: None,
+        }
+    }
+}
+
+#[async_trait]
+impl CipherHost for EphemeralHost {
+    async fn write(&mut self, cipher: Vec<u8>, proof: Vec<u8>) -> anyhow::Result<()> {
+        let _ = self.ciphertext_and_proof.insert((cipher, proof));
+        Ok(())
+    }
+
+    async fn read(&self) -> anyhow::Result<(Vec<u8>, Vec<u8>)> {
+        let (cipher, proof) = self.ciphertext_and_proof.as_ref().unwrap();
+        Ok((cipher.clone(), proof.clone()))
+    }
+
+    async fn is_hosted(&self) -> anyhow::Result<bool> {
+        Ok(self.ciphertext_and_proof.is_some())
     }
 }

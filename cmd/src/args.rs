@@ -104,6 +104,21 @@ pub struct BuyArgs {
 pub struct CompileArgs {
     help: bool,
 
-    #[options(help = "path to write circuit artifacts", default = "./")]
-    pub output_dir: String,
+    #[options(
+        help = "path to the directory where cache is stored",
+        default = "./cache"
+    )]
+    pub cache_dir: String,
+
+    #[options(
+        help = "path to the directory where cache is stored",
+        default = "./build"
+    )]
+    pub build_dir: String,
+
+    #[options(
+        help = "limit of arbitrary size possible to encrypt with ZK circuit (n * 32b)",
+        default = "100"
+    )]
+    pub limit_data_enc_dir: usize,
 }

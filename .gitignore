@@ -10,12 +10,10 @@ Cargo.lock
 **/*.rs.bk
 
 .idea
-keys/
+
 data.json
-
-*.pk
-*.vk
-
 bought_data.json
 
+keys/
 cache/
+build/
