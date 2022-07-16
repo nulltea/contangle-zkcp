@@ -13,7 +13,6 @@ sha2 = { version = "0.9"}
 sha3 = { version = "0.9"}
 ecies = "0.2.2"
 rand_chacha = "0.3.1"
-crypto = { version = "0.3.0", features = ["aead", "elliptic-curve", "cipher", "std", "digest"]}
 secp256kfun = { version = "0.7.1", features = ["secp256k1"] }
 ecdsa_fun = { version = "0.7.1", features = ["adaptor"] }
 byte-slice-cast = "1.2.1"
@@ -21,9 +20,9 @@ byte-slice-cast = "1.2.1"
 backoff = {version = "0.4.0", features = ["tokio"]}
 lazy_static = "^1.4.0"
 
-ethers = { version = "0.6.0" }
+ethers = { version = "0.14.0" }
 eth-keystore = "0.4.1"
-k256 = { version = "0.9.6", features = ["ecdsa-core"]}
+k256 = { version = "0.11.3", features = ["ecdsa-core"]}
 url = "2.2.2"
 bip39 = "1.0.1"
 hex = "0.4.3"

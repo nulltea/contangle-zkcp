@@ -1,6 +1,7 @@
 #![feature(inherent_associated_types)]
 extern crate core;
 
+mod circom;
 pub mod encryption;
 mod parameters;
 pub mod poseidon;
