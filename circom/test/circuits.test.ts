@@ -5,15 +5,14 @@ const Fr = new ff.F1Field(exports.p);
 
 describe("circom circuits", () => {
 	test("hash", async () => {
-		let circuit = await wasm_tester("hash.circom");
+		let circuit = await wasm_tester("dummy.circom");
 		await circuit.loadConstraints();
 
 		const inputs = {
-			"plaintext": [0]
+			"plaintext": [...Array(10).keys()],
+			"challenge": 0
 		};
 		const witness = await circuit.calculateWitness(inputs, true);
-		let hash = BigInt(witness[1]);
-		console.log(hash.toString('16'));
 	});
 });
 

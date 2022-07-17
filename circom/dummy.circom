@@ -1,12 +1,10 @@
 pragma circom 2.0.0;
 
-include "./node_modules/circomlib/circuits/poseidon.circom";
-
 template DummyProperty(n) {
     signal input plaintext[n];
     signal input challenge;
 
-    plaintext[0] === challenge;
+    challenge === plaintext[0]*plaintext[0]; // todo: challenge === plaintext goes unnotised with ark-circom 
 }
 
-component main {public [challenge]} = DummyProperty(10);
+component main = DummyProperty(1);

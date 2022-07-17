@@ -25,6 +25,8 @@ ark-bw6-761 = { version = "0.3.0" }
 ark-bn254 = { version = "0.3.0" }
 
 ark-circom = { path = "../../examples/ark-circom", features = [ "circom-2" ] }
+# ark-circom = { git = "https://github.com/gakonst/ark-circom", rev="a93c8b0", features=["circom-2"] }
+
 arkworks-gadgets = { version = "0.4.20", features = ["r1cs"] }
 
 pretty_env_logger = "0.4.0"

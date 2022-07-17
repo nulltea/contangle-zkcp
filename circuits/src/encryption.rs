@@ -263,34 +263,6 @@ where
 
         Ok((c1, c2))
     }
-
-    pub fn constraint_witness(
-        &self,
-        cs: ConstraintSystemRef<C::BaseField>,
-        plaintext: &FpVar<C::BaseField>,
-    ) -> Result<(), SynthesisError> {
-        // input commitment
-        let ciphertext_commitment_var = FpVar::<C::BaseField>::new_variable(
-            ns!(cs, "plaintext_commitment"),
-            || Ok(Self::commit_to_message(&self.msg, &self.params)),
-            AllocationMode::Input,
-        )?;
-
-        let mut sponge = PoseidonSpongeVar::new(cs.clone(), &self.params.poseidon);
-        sponge.absorb(&plaintext)?;
-
-        let exp = sponge
-            .squeeze_field_elements(1)
-            .and_then(|mut v| Ok(v.remove(0)))?;
-
-        exp.enforce_equal(&ciphertext_commitment_var)
-    }
-
-    pub fn commit_to_message(plaintext: &Plaintext<C>, params: &Parameters<C>) -> C::BaseField {
-        let mut sponge = PoseidonSponge::new(&params.poseidon);
-        sponge.absorb(&plaintext);
-        sponge.squeeze_field_elements(1).remove(0)
-    }
 }
 
 impl<C, CV> ConstraintSynthesizer<C::BaseField> for EncryptCircuit<C, CV>
@@ -314,7 +286,6 @@ where
             .collect::<Result<_, _>>()?;
         let ciphertext = self.ciphertext_var(cs.clone(), AllocationMode::Input)?;
 
-        //self.constraint_inputs(cs.clone(), &ciphertext)?;
         self.verify_encryption(cs.clone(), &message, &ciphertext)
     }
 }

@@ -99,27 +99,29 @@ where
         self,
         cs: ConstraintSystemRef<C::BaseField>,
     ) -> Result<(), SynthesisError> {
+        let (_, message) = self.property_verifier.allocate_variables(cs.clone())?;
         self.property_verifier.generate_constraints(cs.clone())?;
-        self.encryption.generate_constraints(cs)
+
+        let ciphertext = self
+            .encryption
+            .ciphertext_var(cs.clone(), AllocationMode::Input)?;
+
+        self.encryption
+            .verify_encryption(cs.clone(), &message, &ciphertext)
     }
 }
 
 #[cfg(test)]
 mod test {
+    use crate::property_verifier::Property;
     use crate::{ark_from_bytes, ark_to_bytes, EncryptCircuit};
     use crate::{poseidon, Parameters};
     use ark_bls12_381::Bls12_381 as E;
-    // use ark_bn254::{Fq, Fr, FrParameters, G1Projective as Curve};
+    use ark_circom::{CircomBuilder, CircomConfig};
     use ark_ec::ProjectiveCurve;
     use ark_ed_on_bls12_381::{
         constraints::EdwardsVar as CurveVar, EdwardsProjective as Curve, Fq, Fr, FrParameters,
     };
-    // use ark_bls12_377::{
-    //     constraints::G1Var as CurveVar, Fq, Fr, FrParameters, G1Projective as Curve,
-    // };
-    // use ark_bw6_761::BW6_761 as E;
-    use crate::property_verifier::Property;
-    use ark_circom::{CircomBuilder, CircomConfig};
     use ark_ff::{
         BigInteger, BigInteger256, Field, Fp256, One, PrimeField, ToConstraintField, Zero,
     };
@@ -146,7 +148,7 @@ mod test {
     #[test]
     fn test_circuit() {
         let mut rng = test_rng();
-        let bytes = [1, 2, 3];
+        let bytes = [2];
         let msg = vec![Fq::from_random_bytes(&bytes).unwrap()];
 
         let params = Parameters::<Curve> {
@@ -163,16 +165,20 @@ mod test {
         )
         .unwrap();
         let build_property_verifier = || {
-            let cfg = CircomConfig::<E>::new(
+            let mut cfg = CircomConfig::<E>::new(
                 "../circom/build/dummy_js/dummy.wasm",
                 "../circom/build/dummy.r1cs",
             )
             .unwrap();
+            cfg.sanity_check = true;
 
             // Insert our public inputs as key value pairs
             let mut builder = CircomBuilder::<_, Curve>::new(cfg);
-            (0..10).for_each(|i| builder.push_input("plaintext", i));
-            builder.push_input("challenge", 0);
+            // (0..10).for_each(|i| builder.push_input("plaintext", i));
+            msg.clone()
+                .into_iter()
+                .for_each(|m| builder.push_variable("plaintext", m));
+            builder.push_input("challenge", 4);
 
             // Create an empty instance for setting it up
             let circom = builder.setup();
@@ -202,40 +208,6 @@ mod test {
             TestCircuit::verify_proof(&vk, proof, circom_inputs, enc, &params).unwrap();
         assert!(valid_proof);
     }
-
-    // #[test]
-    // fn test_circom() {
-    //     let rng = &mut test_rng();
-    //     // Load the WASM and R1CS for witness and proof generation
-    //     let cfg = CircomConfig::<E>::new(
-    //         "../circom/build/hash/hash_js/hash.wasm",
-    //         "../circom/build/hash/hash.r1cs",
-    //     )
-    //     .unwrap();
-    //
-    //     // Insert our public inputs as key value pairs
-    //     let mut builder = CircomBuilder::new(cfg);
-    //     (0..1).for_each(|i| builder.push_input("plaintext", i));
-    //
-    //     // Create an empty instance for setting it up
-    //     let circom = builder.setup();
-    //
-    //     // Run a trusted setup
-    //     let params = generate_random_parameters::<E, _, _>(circom, rng).unwrap();
-    //
-    //     // Get the populated instance of the circuit with the witness
-    //     let circom = builder.build().unwrap();
-    //
-    //     let mut inputs = circom.get_public_inputs().unwrap();
-    //
-    //     // Generate the proof
-    //     let proof = create_random_proof(circom, &params, rng).unwrap();
-    //
-    //     // Check that the proof is valid
-    //     let pvk = prepare_verifying_key(&params.vk);
-    //     let verified = verify_proof(&pvk, &proof, &inputs).unwrap();
-    //     assert!(verified);
-    // }
 
     // #[test]
     // fn test_poseidon_hash() {
