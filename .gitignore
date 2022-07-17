@@ -17,3 +17,7 @@ bought_data.json
 keys/
 cache/
 build/
+
+**/node_modules/
+*.js
+*.sym

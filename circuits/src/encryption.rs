@@ -323,10 +323,10 @@ where
 mod test {
     use crate::{ark_from_bytes, ark_to_bytes, EncryptCircuit};
     use crate::{poseidon, Parameters};
-    use ark_bls12_381::Bls12_381 as E;
+    use ark_bls12_381::{Bls12_381 as E, Fr};
     use ark_ec::ProjectiveCurve;
     use ark_ed_on_bls12_381::{
-        constraints::EdwardsVar as CurveVar, EdwardsProjective as Curve, Fq, Fr, FrParameters,
+        constraints::EdwardsVar as CurveVar, EdwardsProjective as Curve, Fq, FrParameters,
     };
     // use ark_bls12_377::{
     //     constraints::G1Var as CurveVar, Fq, Fr, FrParameters, G1Projective as Curve,
