@@ -121,4 +121,18 @@ pub struct CompileArgs {
         default = "100"
     )]
     pub limit_data_enc_dir: usize,
+
+    // #[options(help = "build circom circuit as property verifier", default = "true")]
+    // pub circom: bool,
+    #[options(help = "path to built circom .wasm file")]
+    pub wasm_path: String,
+
+    #[options(help = "path to built circom .r1cs file")]
+    pub r1cs_path: String,
+
+    #[options(
+        help = "field in the circom circuit definition corresponding to plaintext",
+        default = "plaintext"
+    )]
+    pub plaintext_field_name: String,
 }

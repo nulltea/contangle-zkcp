@@ -1,15 +1,14 @@
 pragma circom 2.0.0;
 
 template DummyProperty(n) {
-    signal input something;
     signal input plaintext[n];
     signal input challenge;
 
     signal inter;
 
-    inter <== plaintext[0]*plaintext[1];
+    inter <== 4;
 
-    challenge === inter*inter; // todo: challenge === plaintext goes unnotised with ark-circom 
+    challenge === inter*inter; // todo: challenge === plaintext goes unnotised with ark-circom
 }
 
-component main = DummyProperty(2);
+component main = DummyProperty(100);

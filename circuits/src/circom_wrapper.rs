@@ -1,7 +1,7 @@
 use crate::poseidon::get_poseidon_params;
-use crate::{Ciphertext, EncryptCircuit, Parameters};
+use crate::{Ciphertext, EncryptCircuit, Parameters, Plaintext, PublicKey};
 use anyhow::anyhow;
-use ark_circom::CircomCircuit;
+use ark_circom::{CircomBuilder, CircomCircuit, CircomConfig};
 use ark_crypto_primitives::snark::NonNativeFieldInputVar;
 use ark_crypto_primitives::Error;
 use ark_ec::{PairingEngine, ProjectiveCurve};
@@ -27,7 +27,9 @@ use ark_std::vec::Vec;
 use ark_std::UniformRand;
 use std::borrow::Borrow;
 use std::cmp::Ordering;
+use std::collections::HashMap;
 use std::fmt::Debug;
+use std::path::PathBuf;
 use std::str::FromStr;
 
 pub struct CircomWrapper<E: PairingEngine, C, CV>
@@ -37,7 +39,7 @@ where
     CV: CurveVar<C, C::BaseField>,
 {
     encryption: EncryptCircuit<C, CV>,
-    property_verifier: CircomCircuit<E, C>,
+    circom: CircomCircuit<E, C>,
 }
 
 impl<E, C, CV> CircomWrapper<E, C, CV>
@@ -45,42 +47,30 @@ where
     E: PairingEngine,
     C: ProjectiveCurve,
     C::BaseField: PrimeField,
+    C::Affine: Absorb,
+    C::BaseField: Absorb,
     CV: CurveVar<C, C::BaseField> + AbsorbGadget<C::BaseField>,
     <C as ProjectiveCurve>::BaseField: From<<E as PairingEngine>::Fr>,
 {
-    pub fn new(
-        encryption: EncryptCircuit<C, CV>,
-        property_verifier: CircomCircuit<E, C>,
-    ) -> anyhow::Result<Self> {
-        Ok(Self {
-            encryption,
-            property_verifier,
-        })
+    pub fn new(encryption: EncryptCircuit<C, CV>, circom: CircomCircuit<E, C>) -> Self {
+        Self { encryption, circom }
     }
 
-    pub fn verify_proof<CI: IntoIterator<Item = E::Fr>>(
-        vk: &VerifyingKey<E>,
-        proof: Proof<E>,
+    pub fn get_public_inputs<CI: IntoIterator<Item = E::Fr>>(
         circom_signals: CI,
-        cipher: Ciphertext<C>,
+        cipher: &Ciphertext<C>,
         params: &Parameters<C>,
-    ) -> anyhow::Result<bool>
+    ) -> Vec<E::Fr>
     where
         C::BaseField: ToConstraintField<E::Fr>,
         C: ToConstraintField<E::Fr>,
     {
-        let c1_inputs = cipher.0.to_field_elements().unwrap();
-        let c2_inputs = (0..params.n)
-            .map(|i| cipher.1.get(i).map_or(C::BaseField::zero(), |&c| c))
-            .flat_map(|c2| c2.to_field_elements().unwrap());
-        let public_inputs = circom_signals
+        circom_signals
             .into_iter()
-            .chain(c1_inputs)
-            .chain(c2_inputs)
-            .collect::<Vec<_>>();
-
-        Groth16::<E>::verify(&vk, &public_inputs, &proof)
-            .map_err(|e| anyhow!("error verifying proof: {e}"))
+            .chain(EncryptCircuit::<C, CV>::get_public_inputs::<E>(
+                cipher, params,
+            ))
+            .collect()
     }
 }
 
@@ -98,11 +88,9 @@ where
         self,
         cs: ConstraintSystemRef<C::BaseField>,
     ) -> Result<(), SynthesisError> {
-        let (_, mut circom_witnesses) = self.property_verifier.allocate_variables(cs.clone())?;
-        let message = circom_witnesses.remove("plaintext").unwrap();
-        println!("messages: {}", message.len());
-        self.property_verifier
-            .verify_linear_combinations(cs.clone())?;
+        let (_, mut circom_witnesses) = self.circom.allocate_variables(cs.clone())?;
+        let message = circom_witnesses.remove("plaintext").map_or(vec![], |vs| vs);
+        self.circom.verify_linear_combinations(cs.clone())?;
 
         let ciphertext = self
             .encryption
@@ -178,7 +166,6 @@ mod test {
 
             // Insert our public inputs as key value pairs
             let mut builder = CircomBuilder::<_, Curve>::new(cfg);
-            // (0..10).for_each(|i| builder.push_input("plaintext", i));
             builder.push_input("something", 3);
             msg.clone()
                 .into_iter()
@@ -192,7 +179,7 @@ mod test {
             let circom = builder.build().unwrap();
             circom
         };
-        let circuit = TestCircuit::new(enc_circuit, build_property_verifier()).unwrap();
+        let circuit = TestCircuit::new(enc_circuit, build_property_verifier());
         let (pk, vk) = Groth16::<E>::setup(circuit, &mut rng).unwrap();
 
         let enc_circuit = TestEnc::new(
@@ -202,15 +189,15 @@ mod test {
             &mut rng,
         )
         .unwrap();
-        let enc = enc_circuit.enc.clone();
+        let enc = enc_circuit.resulted_ciphertext.clone();
 
         let property_verifier = build_property_verifier();
         let mut circom_inputs = property_verifier.get_public_inputs().unwrap();
-        let circuit = TestCircuit::new(enc_circuit, property_verifier).unwrap();
+        let circuit = TestCircuit::new(enc_circuit, property_verifier);
         let proof = Groth16::prove(&pk, circuit, &mut rng).unwrap();
 
-        let valid_proof =
-            TestCircuit::verify_proof(&vk, proof, circom_inputs, enc, &params).unwrap();
+        let public_inputs = TestCircuit::get_public_inputs(circom_inputs, &enc, &params);
+        let valid_proof = Groth16::<E>::verify(&vk, &public_inputs, &proof).unwrap();
         assert!(valid_proof);
     }
 }

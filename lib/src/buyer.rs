@@ -1,11 +1,12 @@
 use crate::traits::ChainProvider;
-use crate::zkp::{ZkConfig, ZkEncryption};
-use crate::{CipherHost, PairingEngine, ProjectiveCurve};
+use crate::zk_encryption::ZkEncryption;
+use crate::{CipherHost, PairingEngine, ProjectiveCurve, ZkConfig, ZkPropertyVerifier};
 use anyhow::anyhow;
 use backoff::ExponentialBackoff;
 use circuits::{ark_from_bytes, encryption, plaintext_chunks_to_bytes, SecretKey};
 use ecdsa_fun::adaptor::{Adaptor, EncryptedSignature, HashTranscript};
 use ethers::prelude::{Address, H256};
+use num_bigint::BigInt;
 use rand_chacha::ChaCha20Rng;
 use secp256kfun::nonce::Deterministic;
 use secp256kfun::{Point, Scalar};
@@ -18,7 +19,7 @@ pub struct Buyer<TChainProvider> {
     encrypted_key: Option<Vec<u8>>,
     one_time_pk: Option<Point>,
     encrypted_sig: Option<EncryptedSignature>,
-    data_encryption: ZkEncryption,
+    data_encryption: ZkPropertyVerifier,
     key_encryption: ZkEncryption,
 }
 
@@ -31,8 +32,9 @@ impl<TChainProvider: ChainProvider> Buyer<TChainProvider> {
     pub fn new(cfg: BuyerConfig, chain: TChainProvider, wallet: crate::LocalWallet) -> Self {
         let nonce_gen = Deterministic::<Sha256>::default();
         let adaptor = Adaptor::<HashTranscript<Sha256, ChaCha20Rng>, _>::new(nonce_gen);
-        let data_encryption = ZkEncryption::new_verifier(
-            &cfg.zk.data_encryption_dir,
+        let data_encryption = ZkPropertyVerifier::new_verifier(
+            &cfg.zk.prop_verifier_dir,
+            cfg.zk.circom_params.clone(),
             encryption::Parameters::default_multi(cfg.zk.data_encryption_limit),
         );
         let key_encryption =
@@ -51,12 +53,18 @@ impl<TChainProvider: ChainProvider> Buyer<TChainProvider> {
     }
 
     /// Step 0: Bob verifies data ciphertext.
-    pub fn step0_verify<CB: AsRef<[u8]>, PB: AsRef<[u8]>>(
+    pub fn step0_verify<
+        CB: AsRef<[u8]>,
+        PB: AsRef<[u8]>,
+        AV: Iterator<Item = (String, Vec<BigInt>)>,
+    >(
         &self,
         encrypted_data: CB,
         proof: PB,
+        additional_values: AV,
     ) -> anyhow::Result<bool> {
-        self.data_encryption.verify_proof(proof, encrypted_data)
+        self.data_encryption
+            .verify_proof(proof, encrypted_data, additional_values)
     }
 
     /// Step 2: Bob signs a transaction to transfer coins to Alice address

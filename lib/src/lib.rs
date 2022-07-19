@@ -2,21 +2,24 @@
 
 mod buyer;
 pub mod cipher_host;
+mod config;
 mod ethereum;
 mod seller;
 mod traits;
 mod utils;
 mod wallet;
-mod zkp;
+mod zk_encryption;
+mod zk_property;
 
 pub use buyer::*;
+pub use config::*;
 pub use ethereum::*;
-use lazy_static::lazy_static;
 pub use seller::*;
 pub use traits::*;
 pub use utils::*;
 pub use wallet::*;
-pub use zkp::*;
+pub use zk_encryption::*;
+pub use zk_property::*;
 
 pub use ark_bls12_381::Bls12_381 as PairingEngine;
 pub use ark_ed_on_bls12_381::{

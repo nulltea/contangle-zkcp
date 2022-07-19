@@ -4,31 +4,27 @@ mod args;
 
 use crate::args::{BuyArgs, CLIArgs, Command, CompileArgs, SellArgs, SetupArgs};
 use anyhow::anyhow;
-use async_std::fs;
-use async_std::path::Path;
 use chrono;
 use circuits::encryption;
+use futures_util::TryFutureExt;
 use gumdrop::Options;
 use inquire::{Confirm, Password, Select, Text};
+use num_bigint::BigInt;
+use rocket::http::hyper::body::HttpBody;
 use scriptless_zkcp::{
     cipher_host, keypair_from_bip39, keypair_from_hex, keypair_gen, write_to_keystore, BuyerConfig,
-    CipherDownloader, CipherHost, Ethereum, LocalWallet, PairingEngine, Seller, SellerConfig,
-    Step1Msg, ZkConfig, ZkEncryption,
+    CipherDownloader, CipherHost, CircomParams, Ethereum, LocalWallet, PairingEngine, Seller,
+    SellerConfig, Step1Msg, ZkConfig, ZkEncryption, ZkPropertyVerifier,
 };
 use scriptless_zkcp::{Buyer, ChainProvider};
 use server::client;
+use std::collections::HashMap;
+use std::fs;
+use std::path::Path;
 use std::path::PathBuf;
 use std::process;
 use tokio::spawn;
 use url::Url;
-
-const CHAIN_ID: u64 = 31337;
-
-const ALICE_ADDR: &str = "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266";
-const ALICE_SK: &str = "ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
-
-const BOB_ADDR: &str = "0x70997970c51812dc3a010c7d01b50e0d17dc79c8";
-const BOB_SK: &str = "59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d";
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -88,7 +84,7 @@ async fn sell(args: SellArgs) -> anyhow::Result<()> {
     let wallet = LocalWallet::from_keystore(keystore, password)?;
 
     let rpc_url = Url::parse(&args.rpc_address).map_err(|e| anyhow!("bad rpc address: {e}"))?;
-    let eth_provider = Ethereum::new(rpc_url).await;
+    let eth_provider = Ethereum::new(rpc_url).await?;
 
     let price_str = args
         .price
@@ -99,10 +95,19 @@ async fn sell(args: SellArgs) -> anyhow::Result<()> {
 
     let mut cipher_host = cipher_host::LocalHost::new(&args.cache_dir);
 
+    if !Path::new("zk-config.json").exists() {
+        return Err(anyhow!(
+            "'zk-config.json' not found. Use `compile` command to generate one."
+        ));
+    }
+
     let cfg = SellerConfig {
         price,
         cache_dir: PathBuf::from(args.cache_dir),
-        zk: Default::default(),
+        zk: serde_json::from_slice(
+            &*fs::read("zk-config.json").expect("expect zk-config.json to exist"),
+        )
+        .map_err(|e| anyhow!("error unmarshalling zk-config.json"))?,
     };
     let (mut seller, to_runtime) = Seller::new(cfg, eth_provider, cipher_host.clone(), wallet)?;
 
@@ -111,9 +116,7 @@ async fn sell(args: SellArgs) -> anyhow::Result<()> {
         let data_path = args
             .data_path
             .unwrap_or_else(|| Text::new("File to be sold:").prompt().unwrap());
-        let data = fs::read(data_path)
-            .await
-            .map_err(|e| anyhow!("error reading data: {e}"))?;
+        let data = fs::read(data_path).map_err(|e| anyhow!("error reading data: {e}"))?;
         seller.step0_setup(data).await?;
     } else {
         println!("encrypted data was restored from cache.");
@@ -130,7 +133,7 @@ async fn sell(args: SellArgs) -> anyhow::Result<()> {
 
 async fn buy(args: BuyArgs) -> anyhow::Result<()> {
     let rpc_url = Url::parse(&args.rpc_address).map_err(|e| anyhow!("bad rpc address: {e}"))?;
-    let eth_provider = Ethereum::new(rpc_url).await;
+    let eth_provider = Ethereum::new(rpc_url).await?;
 
     let client = client::SellerClient::new(args.seller_address)?;
     let price = client.price().await?;
@@ -154,14 +157,29 @@ async fn buy(args: BuyArgs) -> anyhow::Result<()> {
     let address = eth_provider.address_from_pk(wallet.pub_key());
     let pub_key = wallet.pub_key().clone();
 
+    if !Path::new("zk-config.json").exists() {
+        return Err(anyhow!(
+            "'zk-config.json' file not found. Please ask seller of details."
+        ));
+    }
+
     let cfg = BuyerConfig {
-        zk: Default::default(),
+        zk: serde_json::from_slice(
+            &*fs::read("zk-config.json").expect("expect zk-config.json to exist"),
+        )
+        .map_err(|e| anyhow!("error unmarshalling zk-config.json"))?,
     };
     let mut buyer = Buyer::new(cfg, eth_provider, wallet);
 
+    let addt_vals = {
+        let mut m = HashMap::new();
+        m.insert("challenge".to_string(), vec![BigInt::from(16)]);
+        m
+    };
+
     println!("downloading encrypted data...");
     let (encrypted_data, proof_of_encryption) = client.download().await?;
-    if !buyer.step0_verify(&encrypted_data, proof_of_encryption)? {
+    if !buyer.step0_verify(&encrypted_data, proof_of_encryption, addt_vals.into_iter())? {
         return Err(anyhow!("seller sent invalid proof of data encryption"));
     }
     println!("proof of encryption is valid");
@@ -206,10 +224,8 @@ async fn buy(args: BuyArgs) -> anyhow::Result<()> {
     });
 
     let data_path = Path::new(&data_path);
-    let _ = fs::create_dir_all(data_path.parent().unwrap()).await;
-    fs::write(data_path, data)
-        .await
-        .map_err(|e| anyhow!("error writing decrypted data: {e}"))?;
+    let _ = fs::create_dir_all(data_path.parent().unwrap());
+    fs::write(data_path, data).map_err(|e| anyhow!("error writing decrypted data: {e}"))?;
 
     println!(
         "find your purchased data at {}",
@@ -233,17 +249,29 @@ async fn compile(args: CompileArgs) -> anyhow::Result<()> {
 
     let build_dir = PathBuf::from(args.build_dir);
     let cfg = ZkConfig {
-        data_encryption_dir: build_dir.join("data_encryption"),
+        prop_verifier_dir: build_dir.join("data_encryption"),
         data_encryption_limit: args.limit_data_enc_dir,
         key_encryption_dir: build_dir.join("key_encryption"),
+        circom_params: CircomParams {
+            plaintext_field_name: args.plaintext_field_name,
+            wasm_path: PathBuf::from(args.wasm_path),
+            r1cs_path: PathBuf::from(args.r1cs_path),
+        },
     };
 
+    fs::write(
+        "zk-config.json",
+        serde_json::to_vec(&cfg).expect("expected zk config to marshal to json"),
+    )
+    .map_err(|e| anyhow!("error saving zk config: {e}"))?;
+
     println!("compiling data encryption circuit...");
-    let data_encryption = ZkEncryption::new(
-        &cfg.data_encryption_dir,
+    let prop_verification = ZkPropertyVerifier::new(
+        &cfg.prop_verifier_dir,
+        cfg.circom_params,
         encryption::Parameters::default_multi(cfg.data_encryption_limit),
     );
-    let _ = data_encryption.compile(&mut rand::thread_rng())?;
+    let _ = prop_verification.compile(&mut rand::thread_rng())?;
 
     println!("compiling key encryption circuit...");
     let key_encryption = ZkEncryption::new(&cfg.key_encryption_dir, Default::default());

@@ -17,14 +17,17 @@ pub struct Ethereum {
 }
 
 impl Ethereum {
-    pub async fn new(url: impl Into<Url>) -> Self {
+    pub async fn new(url: impl Into<Url>) -> anyhow::Result<Self> {
         let provider = Provider::new(Http::new(url));
-        let chain_id = provider.get_chainid().await.unwrap();
+        let chain_id = provider
+            .get_chainid()
+            .await
+            .map_err(|e| anyhow!("error making request to the specified Ethereum RPC address"))?;
 
-        Self {
+        Ok(Self {
             provider,
             chain_id: chain_id.as_u64(),
-        }
+        })
     }
 }
 
