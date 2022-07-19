@@ -30,7 +30,7 @@ use std::cmp::Ordering;
 use std::fmt::Debug;
 use std::str::FromStr;
 
-pub struct Property<E: PairingEngine, C, CV>
+pub struct CircomWrapper<E: PairingEngine, C, CV>
 where
     C: ProjectiveCurve,
     C::BaseField: PrimeField,
@@ -40,7 +40,7 @@ where
     property_verifier: CircomCircuit<E, C>,
 }
 
-impl<E, C, CV> Property<E, C, CV>
+impl<E, C, CV> CircomWrapper<E, C, CV>
 where
     E: PairingEngine,
     C: ProjectiveCurve,
@@ -69,7 +69,6 @@ where
         C::BaseField: ToConstraintField<E::Fr>,
         C: ToConstraintField<E::Fr>,
     {
-        //let commit = Self::commit_to_inputs(&cipher, &params);
         let c1_inputs = cipher.0.to_field_elements().unwrap();
         let c2_inputs = (0..params.n)
             .map(|i| cipher.1.get(i).map_or(C::BaseField::zero(), |&c| c))
@@ -85,7 +84,7 @@ where
     }
 }
 
-impl<E, C, CV> ConstraintSynthesizer<C::BaseField> for Property<E, C, CV>
+impl<E, C, CV> ConstraintSynthesizer<C::BaseField> for CircomWrapper<E, C, CV>
 where
     E: PairingEngine,
     C: ProjectiveCurve,
@@ -99,8 +98,11 @@ where
         self,
         cs: ConstraintSystemRef<C::BaseField>,
     ) -> Result<(), SynthesisError> {
-        let (_, message) = self.property_verifier.allocate_variables(cs.clone())?;
-        self.property_verifier.generate_constraints(cs.clone())?;
+        let (_, mut circom_witnesses) = self.property_verifier.allocate_variables(cs.clone())?;
+        let message = circom_witnesses.remove("plaintext").unwrap();
+        println!("messages: {}", message.len());
+        self.property_verifier
+            .verify_linear_combinations(cs.clone())?;
 
         let ciphertext = self
             .encryption
@@ -113,7 +115,7 @@ where
 
 #[cfg(test)]
 mod test {
-    use crate::property_verifier::Property;
+    use crate::circom_wrapper::CircomWrapper;
     use crate::{ark_from_bytes, ark_to_bytes, EncryptCircuit};
     use crate::{poseidon, Parameters};
     use ark_bls12_381::Bls12_381 as E;
@@ -143,16 +145,18 @@ mod test {
     use std::borrow::Borrow;
 
     type TestEnc = EncryptCircuit<Curve, CurveVar>;
-    type TestCircuit = Property<E, Curve, CurveVar>;
+    type TestCircuit = CircomWrapper<E, Curve, CurveVar>;
 
     #[test]
     fn test_circuit() {
         let mut rng = test_rng();
-        let bytes = [2];
-        let msg = vec![Fq::from_random_bytes(&bytes).unwrap()];
+        let msg = vec![
+            Fq::from_random_bytes(&[2]).unwrap(),
+            Fq::from_random_bytes(&[2]).unwrap(),
+        ];
 
         let params = Parameters::<Curve> {
-            n: 1,
+            n: 2,
             poseidon: poseidon::get_poseidon_params::<Curve>(2),
         };
         let (_, pub_key) = TestEnc::keygen(&mut rng).unwrap();
@@ -175,10 +179,11 @@ mod test {
             // Insert our public inputs as key value pairs
             let mut builder = CircomBuilder::<_, Curve>::new(cfg);
             // (0..10).for_each(|i| builder.push_input("plaintext", i));
+            builder.push_input("something", 3);
             msg.clone()
                 .into_iter()
                 .for_each(|m| builder.push_variable("plaintext", m));
-            builder.push_input("challenge", 4);
+            builder.push_input("challenge", 16);
 
             // Create an empty instance for setting it up
             let circom = builder.setup();
@@ -208,18 +213,4 @@ mod test {
             TestCircuit::verify_proof(&vk, proof, circom_inputs, enc, &params).unwrap();
         assert!(valid_proof);
     }
-
-    // #[test]
-    // fn test_poseidon_hash() {
-    //     let rng = &mut test_rng();
-    //
-    //     let cs = ConstraintSystem::<Fq>::new_ref();
-    //     let mut poseidon =
-    //         PoseidonSponge::<Fq>::new(&crate::poseidon::get_poseidon_params::<Curve>(2));
-    //     poseidon.absorb(&Fq::zero());
-    //     let hash = poseidon.squeeze_field_elements::<Fq>(1).remove(0);
-    //
-    //     let hash_bytes = ark_to_bytes(hash).unwrap();
-    //     println!("{}", hex::encode(hash_bytes));
-    // }
 }

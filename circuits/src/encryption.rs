@@ -146,7 +146,6 @@ where
         C::BaseField: ToConstraintField<E::Fr>,
         C: ToConstraintField<E::Fr>,
     {
-        //let commit = Self::commit_to_inputs(&cipher, &params);
         let c1_inputs = cipher.0.to_field_elements().unwrap();
         let c2_inputs = (0..params.n)
             .map(|i| cipher.1.get(i).map_or(C::BaseField::zero(), |&c| c))

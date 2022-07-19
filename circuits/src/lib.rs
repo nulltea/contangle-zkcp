@@ -1,10 +1,10 @@
 #![feature(inherent_associated_types)]
 extern crate core;
 
+mod circom_wrapper;
 pub mod encryption;
 mod parameters;
 pub mod poseidon;
-mod property_verifier;
 mod utils;
 
 pub use crate::encryption::*;

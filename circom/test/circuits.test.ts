@@ -9,8 +9,9 @@ describe("circom circuits", () => {
 		await circuit.loadConstraints();
 
 		const inputs = {
-			"plaintext": [...Array(10).keys()],
-			"challenge": 0
+			"something": 3,
+			"plaintext": [2,2],
+			"challenge": 16
 		};
 		const witness = await circuit.calculateWitness(inputs, true);
 	});
