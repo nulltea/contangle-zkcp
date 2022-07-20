@@ -121,11 +121,7 @@ impl<TChainProvider: ChainProvider, TCipherHost: CipherHost> Seller<TChainProvid
         )
         .map_err(|e| anyhow!("error caching decryption key: {e}"))?;
 
-        let addt_vals = {
-            let mut m = HashMap::new();
-            m.insert("challenge".to_string(), vec![BigInt::from(16)]);
-            m
-        };
+        let addt_vals = HashMap::new();
         let (encrypted_data, proof_of_encryption) =
             self.property_verifier.assess_property_and_encrypt(
                 data,

@@ -171,11 +171,7 @@ async fn buy(args: BuyArgs) -> anyhow::Result<()> {
     };
     let mut buyer = Buyer::new(cfg, eth_provider, wallet);
 
-    let addt_vals = {
-        let mut m = HashMap::new();
-        m.insert("challenge".to_string(), vec![BigInt::from(16)]);
-        m
-    };
+    let addt_vals = HashMap::new();
 
     println!("downloading encrypted data...");
     let (encrypted_data, proof_of_encryption) = client.download().await?;
