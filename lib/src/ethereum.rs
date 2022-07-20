@@ -7,7 +7,9 @@ use secp256kfun::{marker::*, Point, Scalar};
 use url::Url;
 
 pub use ethers::utils::WEI_IN_ETHER;
-use k256::{EncodedPoint as K256PublicKey};
+use k256::ecdsa::VerifyingKey;
+use k256::elliptic_curve::sec1::ToEncodedPoint;
+use k256::{EncodedPoint as K256PublicKey, PublicKey};
 
 pub struct Ethereum {
     provider: Provider<Http>,
@@ -15,14 +17,17 @@ pub struct Ethereum {
 }
 
 impl Ethereum {
-    pub async fn new(url: impl Into<Url>) -> Self {
+    pub async fn new(url: impl Into<Url>) -> anyhow::Result<Self> {
         let provider = Provider::new(Http::new(url));
-        let chain_id = provider.get_chainid().await.unwrap();
+        let chain_id = provider
+            .get_chainid()
+            .await
+            .map_err(|e| anyhow!("error making request to the specified Ethereum RPC address"))?;
 
-        Self {
+        Ok(Self {
             provider,
             chain_id: chain_id.as_u64(),
-        }
+        })
     }
 }
 
@@ -37,18 +42,19 @@ impl ChainProvider for Ethereum {
         amount: f64,
     ) -> anyhow::Result<(Self::Tx, H256)> {
         let tx = TransactionRequest::new()
+            .chain_id(self.chain_id)
             .from(from)
             .to(to)
             .value(parse_ether(amount).map_err(|e| anyhow!("error parsing ether: {e}"))?);
 
-        let tx_hash = tx.sighash(self.chain_id);
+        let tx_hash = tx.sighash();
 
         Ok((tx, tx_hash))
     }
 
     async fn sent_signed(&self, tx: Self::Tx, sig: &ecdsa_fun::Signature) -> anyhow::Result<H256> {
         let from = tx.from.unwrap();
-        let m = tx.sighash(self.chain_id);
+        let m = tx.sighash();
         let r = U256::from_big_endian(&sig.R_x.to_bytes());
         let s = U256::from_big_endian(&sig.s.to_bytes());
         let v = {
@@ -108,10 +114,9 @@ impl ChainProvider for Ethereum {
     }
 
     fn address_from_pk(&self, pk: &Point) -> Address {
-        let uncompressed_pub_key = K256PublicKey::from_bytes(pk.to_bytes())
-            .unwrap()
-            .decompress();
-        let public_key = uncompressed_pub_key.unwrap().to_bytes();
+        let public_key = PublicKey::from_sec1_bytes(pk.to_bytes().as_slice()).unwrap();
+        let public_key = public_key.to_encoded_point(false);
+        let public_key = public_key.as_bytes();
         debug_assert_eq!(public_key[0], 0x04);
         let hash = keccak256(&public_key[1..]);
         Address::from_slice(&hash[12..])

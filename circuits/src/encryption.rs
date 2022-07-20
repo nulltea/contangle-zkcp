@@ -37,7 +37,7 @@ where
     r: Randomness<C>,
     msg: Plaintext<C>,
     pk: PublicKey<C>,
-    pub enc: Ciphertext<C>,
+    pub resulted_ciphertext: Ciphertext<C>,
     params: Parameters<C>,
     _curve_var: PhantomData<CV>,
 }
@@ -117,7 +117,7 @@ where
             r,
             msg,
             pk,
-            enc,
+            resulted_ciphertext: enc,
             params,
             _curve_var: PhantomData,
         })
@@ -136,25 +136,19 @@ where
         Ok((secret_key, public_key))
     }
 
-    pub fn verify_proof<E: PairingEngine>(
-        vk: &VerifyingKey<E>,
-        proof: Proof<E>,
-        cipher: Ciphertext<C>,
+    pub fn get_public_inputs<E: PairingEngine>(
+        cipher: &Ciphertext<C>,
         params: &Parameters<C>,
-    ) -> anyhow::Result<bool>
+    ) -> Vec<E::Fr>
     where
         C::BaseField: ToConstraintField<E::Fr>,
         C: ToConstraintField<E::Fr>,
     {
-        //let commit = Self::commit_to_inputs(&cipher, &params);
         let c1_inputs = cipher.0.to_field_elements().unwrap();
         let c2_inputs = (0..params.n)
             .map(|i| cipher.1.get(i).map_or(C::BaseField::zero(), |&c| c))
             .flat_map(|c2| c2.to_field_elements().unwrap());
-        let public_inputs = c1_inputs.into_iter().chain(c2_inputs).collect::<Vec<_>>();
-
-        Groth16::<E>::verify(&vk, &public_inputs, &proof)
-            .map_err(|e| anyhow!("error verifying proof: {e}"))
+        c1_inputs.into_iter().chain(c2_inputs).collect()
     }
 
     fn encrypt(
@@ -250,46 +244,28 @@ where
         cs: ConstraintSystemRef<C::BaseField>,
         mode: AllocationMode,
     ) -> Result<(CV, Vec<FpVar<C::BaseField>>), SynthesisError> {
-        let c1 = CV::new_variable(ns!(cs, "ciphertext"), || Ok(self.enc.0), mode)?;
+        let c1 = CV::new_variable(
+            ns!(cs, "ciphertext"),
+            || Ok(self.resulted_ciphertext.0),
+            mode,
+        )?;
         let c2 = (0..self.params.n)
             .map(|i| {
                 FpVar::<C::BaseField>::new_variable(
                     ns!(cs, "ciphertext"),
-                    || Ok(self.enc.1.get(i).map_or(C::BaseField::zero(), |c| *c)),
+                    || {
+                        Ok(self
+                            .resulted_ciphertext
+                            .1
+                            .get(i)
+                            .map_or(C::BaseField::zero(), |c| *c))
+                    },
                     mode,
                 )
             })
             .collect::<Result<_, _>>()?;
 
         Ok((c1, c2))
-    }
-
-    pub fn constraint_witness(
-        &self,
-        cs: ConstraintSystemRef<C::BaseField>,
-        plaintext: &FpVar<C::BaseField>,
-    ) -> Result<(), SynthesisError> {
-        // input commitment
-        let ciphertext_commitment_var = FpVar::<C::BaseField>::new_variable(
-            ns!(cs, "plaintext_commitment"),
-            || Ok(Self::commit_to_message(&self.msg, &self.params)),
-            AllocationMode::Input,
-        )?;
-
-        let mut sponge = PoseidonSpongeVar::new(cs.clone(), &self.params.poseidon);
-        sponge.absorb(&plaintext)?;
-
-        let exp = sponge
-            .squeeze_field_elements(1)
-            .and_then(|mut v| Ok(v.remove(0)))?;
-
-        exp.enforce_equal(&ciphertext_commitment_var)
-    }
-
-    pub fn commit_to_message(plaintext: &Plaintext<C>, params: &Parameters<C>) -> C::BaseField {
-        let mut sponge = PoseidonSponge::new(&params.poseidon);
-        sponge.absorb(&plaintext);
-        sponge.squeeze_field_elements(1).remove(0)
     }
 }
 
@@ -314,7 +290,6 @@ where
             .collect::<Result<_, _>>()?;
         let ciphertext = self.ciphertext_var(cs.clone(), AllocationMode::Input)?;
 
-        //self.constraint_inputs(cs.clone(), &ciphertext)?;
         self.verify_encryption(cs.clone(), &message, &ciphertext)
     }
 }
@@ -323,10 +298,10 @@ where
 mod test {
     use crate::{ark_from_bytes, ark_to_bytes, EncryptCircuit};
     use crate::{poseidon, Parameters};
-    use ark_bls12_381::Bls12_381 as E;
+    use ark_bls12_381::{Bls12_381 as E, Fr};
     use ark_ec::ProjectiveCurve;
     use ark_ed_on_bls12_381::{
-        constraints::EdwardsVar as CurveVar, EdwardsProjective as Curve, Fq, Fr, FrParameters,
+        constraints::EdwardsVar as CurveVar, EdwardsProjective as Curve, Fq, FrParameters,
     };
     // use ark_bls12_377::{
     //     constraints::G1Var as CurveVar, Fq, Fr, FrParameters, G1Projective as Curve,
@@ -365,7 +340,7 @@ mod test {
         let circuit =
             TestEnc::new(pk.clone(), vec![msg.clone()], params.clone(), &mut rng).unwrap();
 
-        let plaintext = TestEnc::decrypt(circuit.enc, sk, &params).unwrap();
+        let plaintext = TestEnc::decrypt(circuit.resulted_ciphertext, sk, &params).unwrap();
 
         assert_eq!(vec![msg], plaintext);
     }
@@ -405,10 +380,11 @@ mod test {
         let (pk, vk) = Groth16::<E>::setup(circuit, &mut rng).unwrap();
 
         let circuit = TestEnc::new(pub_key, msg.clone().into(), params.clone(), &mut rng).unwrap();
-        let enc = circuit.enc.clone();
+        let enc = circuit.resulted_ciphertext.clone();
         let proof = Groth16::prove(&pk, circuit, &mut rng).unwrap();
 
-        let valid_proof = TestEnc::verify_proof(&vk, proof, enc, &params).unwrap();
+        let public_inputs = TestEnc::get_public_inputs::<E>(&enc, &params);
+        let valid_proof = Groth16::<E>::verify(&vk, &public_inputs, &proof).unwrap();
         assert!(valid_proof);
     }
 

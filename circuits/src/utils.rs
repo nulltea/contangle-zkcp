@@ -2,7 +2,7 @@ use crate::{Ciphertext, Parameters, Plaintext};
 use anyhow::anyhow;
 use ark_ec::group::Group;
 use ark_ec::{AffineCurve, PairingEngine, ProjectiveCurve};
-use ark_ff::{to_bytes, Field, PrimeField};
+use ark_ff::{to_bytes, Field, PrimeField, Zero};
 use ark_groth16::{Proof, ProvingKey, VerifyingKey};
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize, SerializationError};
 use std::fs;
@@ -45,6 +45,16 @@ pub fn bytes_to_plaintext_chunks<C: ProjectiveCurve, B: AsRef<[u8]>>(
         Some(res) => Ok(res),
         None => Err(anyhow!("failed to cast bytes to scalars")),
     }
+}
+
+pub fn bytes_to_plaintext_chunks_fixed_size<C: ProjectiveCurve, B: AsRef<[u8]>>(
+    bytes: B,
+    size: usize,
+) -> anyhow::Result<Plaintext<C>> {
+    let plaintext = bytes_to_plaintext_chunks::<C, _>(bytes)?;
+    Ok((0..size)
+        .map(|i| plaintext.get(i).map_or(C::BaseField::zero(), |c| *c))
+        .collect())
 }
 
 pub fn plaintext_chunks_to_bytes<C: ProjectiveCurve>(

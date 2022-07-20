@@ -1,6 +1,6 @@
 use crate::{
     keypair_from_bytes, read_proving_key, read_verifying_key, write_circuit_artifacts, CurveVar,
-    Fq, PairingEngine, ProjectiveCurve,
+    Fq, PairingEngine, ProjectiveCurve, PROVING_KEY_FILE, VERIFYING_KEY_FILE,
 };
 use anyhow::anyhow;
 use ark_ff::Field;
@@ -9,37 +9,16 @@ use ark_snark::{CircuitSpecificSetupSNARK, SNARK};
 use ark_std::UniformRand;
 use circuits::{
     ark_from_bytes, ark_to_bytes, bytes_to_plaintext_chunks, encryption, plaintext_chunks_to_bytes,
-    Ciphertext, EncryptCircuit, PublicKey, SecretKey,
+    Ciphertext, EncryptCircuit, Plaintext, PublicKey, SecretKey,
 };
 use rand::{CryptoRng, Rng, RngCore};
 use secp256kfun::{Point, Scalar};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-pub const PROVING_KEY_FILE: &str = "circuit.zkey";
-pub const VERIFYING_KEY_FILE: &str = "verification.key";
-
-#[derive(Clone, Debug)]
-pub struct ZkConfig {
-    pub data_encryption_dir: PathBuf,
-    pub data_encryption_limit: usize,
-    pub key_encryption_dir: PathBuf,
-}
-
-impl Default for ZkConfig {
-    fn default() -> Self {
-        let default_build_dir = PathBuf::from("./build");
-        Self {
-            data_encryption_dir: default_build_dir.join("data_encryption"),
-            data_encryption_limit: 100,
-            key_encryption_dir: default_build_dir.join("key_encryption"),
-        }
-    }
-}
-
 pub struct ZkEncryption {
     build_dir: PathBuf,
-    params: encryption::Parameters<ProjectiveCurve>,
+    pub(crate) params: encryption::Parameters<ProjectiveCurve>,
     proving_key: Option<ProvingKey<PairingEngine>>,
     verifying_key: Option<VerifyingKey<PairingEngine>>,
 }
@@ -74,6 +53,15 @@ impl ZkEncryption {
         }
     }
 
+    pub(crate) fn new_inner(params: encryption::Parameters<ProjectiveCurve>) -> Self {
+        Self {
+            build_dir: PathBuf::new(),
+            params,
+            proving_key: None,
+            verifying_key: None,
+        }
+    }
+
     pub fn encrypt<M: AsRef<[u8]>, R: CryptoRng + RngCore>(
         &self,
         msg: M,
@@ -82,14 +70,8 @@ impl ZkEncryption {
     ) -> anyhow::Result<(Vec<u8>, Vec<u8>)> {
         let mut msg = bytes_to_plaintext_chunks::<ProjectiveCurve, _>(msg.as_ref())
             .map_err(|e| anyhow!("error casting plaintext: {e}"))?;
-
-        let circuit = EncryptCircuit::<ProjectiveCurve, CurveVar>::new(
-            pk,
-            msg,
-            self.params.clone(),
-            &mut rng,
-        )?;
-        let ciphertext = circuit.enc.clone();
+        let circuit = self.build_circuit(msg, pk, &mut rng)?;
+        let ciphertext = circuit.resulted_ciphertext.clone();
         let proving_key = self.proving_key.as_ref().expect("proving key expected");
         let proof = Groth16::<PairingEngine>::prove(proving_key, circuit, &mut rng)
             .map_err(|e| anyhow!("error proving encryption: {e}"))?;
@@ -100,6 +82,15 @@ impl ZkEncryption {
         let proof_encoded = ark_to_bytes(proof)?;
 
         Ok((ciphertext_encoded, proof_encoded))
+    }
+
+    pub(crate) fn build_circuit<R: CryptoRng + RngCore>(
+        &self,
+        msg: Plaintext<ProjectiveCurve>,
+        pk: PublicKey<ProjectiveCurve>,
+        mut rng: &mut R,
+    ) -> anyhow::Result<EncryptCircuit<ProjectiveCurve, CurveVar>> {
+        EncryptCircuit::<ProjectiveCurve, CurveVar>::new(pk, msg, self.params.clone(), &mut rng)
     }
 
     pub fn decrypt<K: AsRef<[u8]>, B: AsRef<[u8]>>(
@@ -154,12 +145,12 @@ impl ZkEncryption {
             .as_ref()
             .expect("verifying key was expected");
 
-        EncryptCircuit::<ProjectiveCurve, CurveVar>::verify_proof::<PairingEngine>(
-            verifying_key,
-            proof,
-            ciphertext,
-            &self.params,
-        )
+        let public_inputs = EncryptCircuit::<ProjectiveCurve, CurveVar>::get_public_inputs::<
+            PairingEngine,
+        >(&ciphertext, &self.params);
+
+        Groth16::verify(&verifying_key, &public_inputs, &proof)
+            .map_err(|e| anyhow!("error verifying Groth'16 proof"))
     }
 
     pub fn compile<R: Rng + CryptoRng>(
@@ -182,5 +173,13 @@ impl ZkEncryption {
             .map_err(|e| anyhow!("error creating build dir: {e}"))?;
         write_circuit_artifacts(&self.build_dir, &pk, &vk)?;
         Ok((pk, vk))
+    }
+
+    pub(crate) fn setup_circuit(&self) -> EncryptCircuit<ProjectiveCurve, CurveVar> {
+        let mut rng = rand::thread_rng();
+        let pk = ProjectiveCurve::rand(&mut rng);
+        let msg = vec![Fq::from_random_bytes(&*vec![]).unwrap()];
+        EncryptCircuit::<ProjectiveCurve, CurveVar>::new(pk, msg, self.params.clone(), &mut rng)
+            .unwrap()
     }
 }
