@@ -151,7 +151,7 @@ where
         c1_inputs.into_iter().chain(c2_inputs).collect()
     }
 
-    fn encrypt(
+    pub fn encrypt(
         pk: &PublicKey<C>,
         msg: &Plaintext<C>,
         r: &Randomness<C>,
@@ -189,8 +189,31 @@ where
         sponge.absorb(&sa);
         let dh = sponge.squeeze_field_elements::<C::BaseField>(1).remove(0);
 
-        // compute message = c2 - s
+        // compute message = c2 - dh
         Ok(c2.into_iter().map(|c2i| c2i - dh).collect())
+    }
+
+    pub fn decrypt_at(
+        cipher: &Ciphertext<C>,
+        idx: usize,
+        sk: SecretKey<C>,
+        params: &Parameters<C>,
+    ) -> anyhow::Result<C::BaseField> {
+        let c1 = cipher.0;
+        let c2 = cipher.1[idx].clone();
+
+        // compute s = c1^secret_key
+        let mut s = c1;
+        s.mul_assign(sk);
+        let sa = s.into_affine();
+
+        // compute dh = H(s)
+        let mut sponge = PoseidonSponge::new(&params.poseidon);
+        sponge.absorb(&sa);
+        let dh = sponge.squeeze_field_elements::<C::BaseField>(1).remove(0);
+
+        // compute message = c2 - dh
+        Ok(c2 - dh)
     }
 
     pub(crate) fn verify_encryption(
@@ -353,7 +376,7 @@ mod test {
         let msg = vec![Fq::from_random_bytes(&bytes).unwrap()];
 
         let params = Parameters::<Curve> {
-            n: 1,
+            n: 196608,
             poseidon: poseidon::get_poseidon_params::<Curve>(2),
         };
         let (_, pub_key) = TestEnc::keygen(&mut rng).unwrap();

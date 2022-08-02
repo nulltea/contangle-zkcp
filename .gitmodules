@@ -1,0 +1,3 @@
+[submodule "circom/zkPhoto"]
+	path = circom/zkPhoto
+	url = https://github.com/socathie/zkPhoto

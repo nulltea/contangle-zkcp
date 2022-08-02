@@ -40,6 +40,7 @@ where
 {
     encryption: EncryptCircuit<C, CV>,
     circom: CircomCircuit<E, C>,
+    shared_field: String,
 }
 
 impl<E, C, CV> CircomWrapper<E, C, CV>
@@ -52,8 +53,16 @@ where
     CV: CurveVar<C, C::BaseField> + AbsorbGadget<C::BaseField>,
     <C as ProjectiveCurve>::BaseField: From<<E as PairingEngine>::Fr>,
 {
-    pub fn new(encryption: EncryptCircuit<C, CV>, circom: CircomCircuit<E, C>) -> Self {
-        Self { encryption, circom }
+    pub fn new(
+        encryption: EncryptCircuit<C, CV>,
+        circom: CircomCircuit<E, C>,
+        shared_field: String,
+    ) -> Self {
+        Self {
+            encryption,
+            circom,
+            shared_field,
+        }
     }
 
     pub fn get_public_inputs<CI: IntoIterator<Item = E::Fr>>(
@@ -89,15 +98,19 @@ where
         cs: ConstraintSystemRef<C::BaseField>,
     ) -> Result<(), SynthesisError> {
         let (_, mut circom_witnesses) = self.circom.allocate_variables(cs.clone())?;
-        let message = circom_witnesses.remove("plaintext").map_or(vec![], |vs| vs);
+        let message = circom_witnesses
+            .remove(&self.shared_field)
+            .map_or(vec![], |vs| vs);
         self.circom.verify_linear_combinations(cs.clone())?;
 
-        let ciphertext = self
-            .encryption
-            .ciphertext_var(cs.clone(), AllocationMode::Input)?;
+        // let ciphertext = self
+        //     .encryption
+        //     .ciphertext_var(cs.clone(), AllocationMode::Input)?;
+        //
+        // self.encryption
+        //     .verify_encryption(cs.clone(), &message, &ciphertext)
 
-        self.encryption
-            .verify_encryption(cs.clone(), &message, &ciphertext)
+        Ok(())
     }
 }
 
@@ -130,7 +143,9 @@ mod test {
     use ark_sponge::poseidon::PoseidonSponge;
     use ark_sponge::CryptographicSponge;
     use ark_std::{test_rng, UniformRand};
+    use serde_json::{Map, Value};
     use std::borrow::Borrow;
+    use std::fs;
 
     type TestEnc = EncryptCircuit<Curve, CurveVar>;
     type TestCircuit = CircomWrapper<E, Curve, CurveVar>;
@@ -138,13 +153,15 @@ mod test {
     #[test]
     fn test_circuit() {
         let mut rng = test_rng();
-        let msg = vec![
-            Fq::from_random_bytes(&[2]).unwrap(),
-            Fq::from_random_bytes(&[2]).unwrap(),
-        ];
+        let image_json = fs::read("../circom/zkPhoto/image/slice0.json").unwrap();
+        let image = image_to_bytes(image_json).unwrap();
+        let msg = image
+            .into_iter()
+            .map(|e| Fq::from(e as u128))
+            .collect::<Vec<_>>();
 
         let params = Parameters::<Curve> {
-            n: 2,
+            n: 49152,
             poseidon: poseidon::get_poseidon_params::<Curve>(2),
         };
         let (_, pub_key) = TestEnc::keygen(&mut rng).unwrap();
@@ -156,21 +173,22 @@ mod test {
             &mut rng,
         )
         .unwrap();
-        let build_property_verifier = || {
+        let build_property_verifier = |circuit: &str| {
             let mut cfg = CircomConfig::<E>::new(
-                "../circom/build/dummy_js/dummy.wasm",
-                "../circom/build/dummy.r1cs",
+                format!("../circom/build/{circuit}_js/{circuit}.wasm"),
+                format!("../circom/build/{circuit}.r1cs"),
             )
             .unwrap();
             cfg.sanity_check = true;
 
             // Insert our public inputs as key value pairs
             let mut builder = CircomBuilder::<_, Curve>::new(cfg);
-            builder.push_input("something", 3);
             msg.clone()
                 .into_iter()
-                .for_each(|m| builder.push_variable("plaintext", m));
-            builder.push_input("challenge", 16);
+                .for_each(|m| builder.push_variable("in", m));
+            vec![115, 119, 126, 109]
+                .into_iter()
+                .for_each(|e| builder.push_input("out", e));
 
             // Create an empty instance for setting it up
             let circom = builder.setup();
@@ -179,7 +197,12 @@ mod test {
             let circom = builder.build().unwrap();
             circom
         };
-        let circuit = TestCircuit::new(enc_circuit, build_property_verifier());
+        let circuitName = "zkPhoto";
+        let circuit = TestCircuit::new(
+            enc_circuit,
+            build_property_verifier(circuitName),
+            "in".to_string(),
+        );
         let (pk, vk) = Groth16::<E>::setup(circuit, &mut rng).unwrap();
 
         let enc_circuit = TestEnc::new(
@@ -191,13 +214,32 @@ mod test {
         .unwrap();
         let enc = enc_circuit.resulted_ciphertext.clone();
 
-        let property_verifier = build_property_verifier();
+        let property_verifier = build_property_verifier(circuitName);
         let mut circom_inputs = property_verifier.get_public_inputs().unwrap();
-        let circuit = TestCircuit::new(enc_circuit, property_verifier);
+        let circuit = TestCircuit::new(enc_circuit, property_verifier, "in".to_string());
         let proof = Groth16::prove(&pk, circuit, &mut rng).unwrap();
 
         let public_inputs = TestCircuit::get_public_inputs(circom_inputs, &enc, &params);
         let valid_proof = Groth16::<E>::verify(&vk, &public_inputs, &proof).unwrap();
         assert!(valid_proof);
+    }
+
+    pub fn image_to_bytes(input: Vec<u8>) -> anyhow::Result<Vec<u8>> {
+        let mut map: Map<String, Value> = serde_json::from_slice(&*input).unwrap();
+
+        let colors: Vec<_> = map
+            .remove("in")
+            .unwrap()
+            .as_array()
+            .unwrap()
+            .into_iter()
+            .flat_map(|e| {
+                e.as_array()
+                    .unwrap()
+                    .into_iter()
+                    .map(|ei| ei.as_u64().unwrap() as u8)
+            })
+            .collect();
+        Ok(colors)
     }
 }

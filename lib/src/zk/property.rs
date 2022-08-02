@@ -1,14 +1,16 @@
+use crate::zk::ZkEncryption;
 use crate::{
     read_proving_key, read_verifying_key, write_circuit_artifacts, CurveVar, PairingEngine,
-    ProjectiveCurve, ZkEncryption, PROVING_KEY_FILE, VERIFYING_KEY_FILE,
+    ProjectiveCurve, PROVING_KEY_FILE, VERIFYING_KEY_FILE,
 };
 use anyhow::anyhow;
 use ark_circom::{CircomBuilder, CircomConfig};
 use ark_groth16::{Groth16, ProvingKey, VerifyingKey};
 use ark_snark::{CircuitSpecificSetupSNARK, SNARK};
 use circuits::{
-    ark_from_bytes, ark_to_bytes, bytes_to_plaintext_chunks, bytes_to_plaintext_chunks_fixed_size,
-    encryption, CircomWrapper, EncryptCircuit, PublicKey, SecretKey,
+    ark_from_bytes, ark_to_bytes, bytes_to_plaintext_chunks, bytes_to_plaintext_chunks_direct,
+    bytes_to_plaintext_chunks_fixed_size, encryption, CircomWrapper, EncryptCircuit, PublicKey,
+    SecretKey,
 };
 use num_bigint::BigInt;
 use rand::{CryptoRng, Rng, RngCore};
@@ -27,6 +29,7 @@ pub struct CircomParams {
 pub struct ZkPropertyVerifier {
     build_dir: PathBuf,
     encryption: ZkEncryption,
+    circom_params: CircomParams,
     circom_builder: CircomBuilder<PairingEngine, ProjectiveCurve>,
     proving_key: Option<ProvingKey<PairingEngine>>,
     verifying_key: Option<VerifyingKey<PairingEngine>>,
@@ -43,11 +46,11 @@ impl ZkPropertyVerifier {
         let verifying_key = proving_key.as_ref().map(|pk| pk.vk.clone());
         let circom_builder = {
             let mut circom_cfg = CircomConfig::<PairingEngine>::new(
-                circom_params.wasm_path,
-                circom_params.r1cs_path,
+                circom_params.wasm_path.clone(),
+                circom_params.r1cs_path.clone(),
             )
             .unwrap();
-            circom_cfg.sanity_check = true;
+            circom_cfg.sanity_check = false;
 
             CircomBuilder::<_, ProjectiveCurve>::new(circom_cfg)
         };
@@ -55,6 +58,7 @@ impl ZkPropertyVerifier {
         Self {
             build_dir: PathBuf::from(build_dir.as_ref()),
             encryption: ZkEncryption::new_inner(enc_params),
+            circom_params,
             circom_builder,
             proving_key,
             verifying_key,
@@ -70,17 +74,18 @@ impl ZkPropertyVerifier {
             .expect("verification key missing");
         let circom_builder = {
             let mut circom_cfg = CircomConfig::<PairingEngine>::new(
-                circom_params.wasm_path,
-                circom_params.r1cs_path,
+                circom_params.wasm_path.clone(),
+                circom_params.r1cs_path.clone(),
             )
             .unwrap();
-            circom_cfg.sanity_check = true;
+            circom_cfg.sanity_check = false;
 
             CircomBuilder::<_, ProjectiveCurve>::new(circom_cfg)
         };
         Self {
             build_dir: PathBuf::from(build_dir.as_ref()),
             encryption: ZkEncryption::new_inner(enc_params),
+            circom_params,
             circom_builder,
             proving_key: None,
             verifying_key: Some(verifying_key),
@@ -98,7 +103,7 @@ impl ZkPropertyVerifier {
         additional_values: AV,
         mut rng: &mut R,
     ) -> anyhow::Result<(Vec<u8>, Vec<u8>)> {
-        let mut msg = bytes_to_plaintext_chunks_fixed_size::<ProjectiveCurve, _>(
+        let mut msg = bytes_to_plaintext_chunks_direct::<ProjectiveCurve, _>(
             msg.as_ref(),
             self.encryption.params.n,
         )
@@ -106,9 +111,9 @@ impl ZkPropertyVerifier {
 
         let mut circom_circuit = {
             let mut builder = self.circom_builder.clone();
-            msg.clone()
-                .into_iter()
-                .for_each(|m| builder.push_variable("plaintext", m));
+            msg.clone().into_iter().for_each(|m| {
+                builder.push_variable(self.circom_params.plaintext_field_name.clone(), m)
+            });
             additional_values
                 .flat_map(|(n, vs)| vs.into_iter().map(move |v| (n.clone(), v)))
                 .for_each(|(var_name, value)| builder.push_input(var_name, value));
@@ -121,7 +126,11 @@ impl ZkPropertyVerifier {
         let ciphertext = enc_circuit.resulted_ciphertext.clone();
         let proving_key = self.proving_key.as_ref().expect("proving key expected");
 
-        let circuit = CircomWrapper::new(enc_circuit, circom_circuit);
+        let circuit = CircomWrapper::new(
+            enc_circuit,
+            circom_circuit,
+            self.circom_params.plaintext_field_name.clone(),
+        );
 
         let proof = Groth16::<PairingEngine>::prove(proving_key, circuit, &mut rng)
             .map_err(|e| anyhow!("error proving encryption: {e}"))?;
@@ -177,7 +186,11 @@ impl ZkPropertyVerifier {
     ) -> anyhow::Result<(ProvingKey<PairingEngine>, VerifyingKey<PairingEngine>)> {
         let enc_circuit = self.encryption.setup_circuit();
         let circom_circuit = self.circom_builder.setup();
-        let circuit = CircomWrapper::new(enc_circuit, circom_circuit);
+        let circuit = CircomWrapper::new(
+            enc_circuit,
+            circom_circuit,
+            self.circom_params.plaintext_field_name.clone(),
+        );
         let (pk, vk) = Groth16::<PairingEngine>::setup(circuit, &mut rng)
             .map_err(|e| anyhow!("error compiling circuit: {e}"))?;
 

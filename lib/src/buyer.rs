@@ -1,6 +1,7 @@
+use crate::encryption::ZkEncryption;
 use crate::traits::ChainProvider;
-use crate::zk_encryption::ZkEncryption;
-use crate::{CipherHost, PairingEngine, ProjectiveCurve, ZkConfig, ZkPropertyVerifier};
+use crate::zk::{ZkEncryption, ZkPropertyVerifier};
+use crate::{CipherHost, PairingEngine, ProjectiveCurve, ZkConfig};
 use anyhow::anyhow;
 use backoff::ExponentialBackoff;
 use circuits::{ark_from_bytes, encryption, plaintext_chunks_to_bytes, SecretKey};

@@ -1,9 +1,12 @@
 use crate::parameters::*;
 use ark_bls12_377::Fq;
+use ark_crypto_primitives::crh::TwoToOneCRHScheme;
 use ark_ec::ProjectiveCurve;
 use ark_ff::PrimeField;
 use ark_sponge::poseidon::PoseidonParameters;
+use ark_sponge::Absorb;
 use std::fmt::Debug;
+use std::marker::PhantomData;
 use std::str::FromStr;
 
 // returns optimized for constraints

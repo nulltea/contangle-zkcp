@@ -1,8 +1,8 @@
 use crate::traits::ChainProvider;
-use crate::{
-    keypair_from_bytes, CipherHost, PairingEngine, ProjectiveCurve, ZkConfig, ZkPropertyVerifier,
-};
+use crate::zk::{ZkEncryption, ZkPropertyVerifier};
+use crate::{keypair_from_bytes, CipherHost, PairingEngine, ProjectiveCurve, ZkConfig};
 use anyhow::anyhow;
+use circuits::{ark_to_bytes, bytes_to_plaintext_chunks, encryption};
 use ecdsa_fun::adaptor::{Adaptor, EncryptedSignature, HashTranscript};
 use ethers::prelude::*;
 use futures::channel::{mpsc, oneshot};
@@ -18,9 +18,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
-
-use crate::zk_encryption::ZkEncryption;
-use circuits::{ark_to_bytes, bytes_to_plaintext_chunks, encryption};
+use std::str::FromStr;
 
 pub struct Seller<TChainProvider, TCipherHost> {
     cfg: SellerConfig,
@@ -121,7 +119,14 @@ impl<TChainProvider: ChainProvider, TCipherHost: CipherHost> Seller<TChainProvid
         )
         .map_err(|e| anyhow!("error caching decryption key: {e}"))?;
 
-        let addt_vals = HashMap::new();
+        let mut addt_vals = HashMap::new();
+        addt_vals.insert(
+            "out".to_string(),
+            vec!["115", "119", "126", "109"]
+                .into_iter()
+                .map(|s| BigInt::from_str(s).unwrap())
+                .collect(),
+        );
         let (encrypted_data, proof_of_encryption) =
             self.property_verifier.assess_property_and_encrypt(
                 data,

@@ -1,6 +1,7 @@
 #![feature(async_closure)]
 
 mod args;
+mod mods;
 
 use crate::args::{BuyArgs, CLIArgs, Command, CompileArgs, SellArgs, SetupArgs};
 use anyhow::anyhow;
@@ -116,7 +117,9 @@ async fn sell(args: SellArgs) -> anyhow::Result<()> {
         let data_path = args
             .data_path
             .unwrap_or_else(|| Text::new("File to be sold:").prompt().unwrap());
+
         let data = fs::read(data_path).map_err(|e| anyhow!("error reading data: {e}"))?;
+        let data = mods::image_to_bytes(data)?;
         seller.step0_setup(data).await?;
     } else {
         println!("encrypted data was restored from cache.");
