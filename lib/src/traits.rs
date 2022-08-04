@@ -1,3 +1,4 @@
+use crate::zk::VerifiableEncryption;
 use async_trait::async_trait;
 use ecdsa_fun::Signature;
 use ethers::prelude::{Address, H256};
@@ -23,14 +24,14 @@ pub trait ChainProvider {
 
 #[async_trait]
 pub trait CipherHost {
-    async fn write(&mut self, cipher: Vec<u8>, proof: Vec<u8>) -> anyhow::Result<()>;
+    async fn write(&mut self, proof: VerifiableEncryption) -> anyhow::Result<()>;
 
-    async fn read(&self) -> anyhow::Result<(Vec<u8>, Vec<u8>)>;
+    async fn read(&self) -> anyhow::Result<VerifiableEncryption>;
 
     async fn is_hosted(&self) -> anyhow::Result<bool>;
 }
 
 #[async_trait]
 pub trait CipherDownloader {
-    async fn download(&self) -> anyhow::Result<(Vec<u8>, Vec<u8>)>;
+    async fn download(&self) -> anyhow::Result<VerifiableEncryption>;
 }

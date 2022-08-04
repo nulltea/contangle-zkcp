@@ -11,10 +11,11 @@ use rocket::http::Status;
 use rocket::response::status;
 use rocket::serde::{json::Json, Deserialize, Serialize};
 use rocket::State;
-use scriptless_zkcp::{SellerMsg, Step0Msg, Step1Msg};
+use scriptless_zkcp::{SellerMsg, Step1Msg};
 
 use secp256kfun::Point;
 
+use scriptless_zkcp::zk::{ProofOfProperty, VerifiableEncryption};
 use std::str::FromStr;
 
 struct Runtime {
@@ -33,6 +34,7 @@ struct InfoResponse {
 struct Step0Response {
     ciphertext: Vec<u8>,
     proof_of_encryption: Vec<u8>,
+    proofs_of_property: Vec<ProofOfProperty>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -66,9 +68,10 @@ async fn step0(state: &State<Runtime>) -> Result<Json<Step0Response>, status::Cu
         .await
         .map_err(|e| status::Custom(Status::ServiceUnavailable, e.to_string()))?;
 
-    let Step0Msg {
+    let VerifiableEncryption {
         ciphertext,
         proof_of_encryption,
+        proofs_of_property,
     } = rx
         .await
         .map_err(|e| status::Custom(Status::ServiceUnavailable, e.to_string()))?
@@ -77,6 +80,7 @@ async fn step0(state: &State<Runtime>) -> Result<Json<Step0Response>, status::Cu
     Ok(Json(Step0Response {
         ciphertext,
         proof_of_encryption,
+        proofs_of_property,
     }))
 }
 

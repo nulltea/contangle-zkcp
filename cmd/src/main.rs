@@ -12,10 +12,13 @@ use gumdrop::Options;
 use inquire::{Confirm, Password, Select, Text};
 use num_bigint::BigInt;
 use rocket::http::hyper::body::HttpBody;
+use scriptless_zkcp::zk::{
+    CircomParams, ZkEncryption, ZkPropertyVerifier, ZkPropertyVerifier2, ZkSampleEntries,
+};
 use scriptless_zkcp::{
     cipher_host, keypair_from_bip39, keypair_from_hex, keypair_gen, write_to_keystore, BuyerConfig,
-    CipherDownloader, CipherHost, CircomParams, Ethereum, LocalWallet, PairingEngine, Seller,
-    SellerConfig, Step1Msg, ZkConfig, ZkEncryption, ZkPropertyVerifier,
+    CipherDownloader, CipherHost, Ethereum, LocalWallet, PairingEngine, Seller, SellerConfig,
+    Step1Msg, ZkConfig,
 };
 use scriptless_zkcp::{Buyer, ChainProvider};
 use server::client;
@@ -110,7 +113,17 @@ async fn sell(args: SellArgs) -> anyhow::Result<()> {
         )
         .map_err(|e| anyhow!("error unmarshalling zk-config.json"))?,
     };
-    let (mut seller, to_runtime) = Seller::new(cfg, eth_provider, cipher_host.clone(), wallet)?;
+    let property_verifier = ZkSampleEntries::new(
+        cfg.zk.prop_verifier_dir.clone(),
+        cfg.zk.data_encryption_limit,
+    );
+    let (mut seller, to_runtime) = Seller::new(
+        cfg,
+        eth_provider,
+        cipher_host.clone(),
+        property_verifier,
+        wallet,
+    )?;
 
     if !cipher_host.is_hosted().await? {
         println!("encrypting data and generation proof of encryption...");
@@ -172,13 +185,16 @@ async fn buy(args: BuyArgs) -> anyhow::Result<()> {
         )
         .map_err(|e| anyhow!("error unmarshalling zk-config.json"))?,
     };
-    let mut buyer = Buyer::new(cfg, eth_provider, wallet);
 
-    let addt_vals = HashMap::new();
+    let property_verifier = ZkSampleEntries::new(
+        cfg.zk.prop_verifier_dir.clone(),
+        cfg.zk.data_encryption_limit,
+    );
+    let mut buyer = Buyer::new(cfg, eth_provider, property_verifier, wallet);
 
     println!("downloading encrypted data...");
-    let (encrypted_data, proof_of_encryption) = client.download().await?;
-    if !buyer.step0_verify(&encrypted_data, proof_of_encryption, addt_vals.into_iter())? {
+    let encrypted_data = client.download().await?;
+    if !buyer.step0_verify(&encrypted_data)? {
         return Err(anyhow!("seller sent invalid proof of data encryption"));
     }
     println!("proof of encryption is valid");
@@ -213,7 +229,7 @@ async fn buy(args: BuyArgs) -> anyhow::Result<()> {
 
     let tx_hash = client.step3(pub_key, enc_sig).await?;
 
-    let data = buyer.step4(tx_hash, encrypted_data).await?;
+    let data = buyer.step4(tx_hash, encrypted_data.ciphertext).await?;
 
     let data_path = args.data_path.unwrap_or_else(|| {
         Text::new("File decrypted! Where to save the result?:")
@@ -248,7 +264,8 @@ async fn compile(args: CompileArgs) -> anyhow::Result<()> {
 
     let build_dir = PathBuf::from(args.build_dir);
     let cfg = ZkConfig {
-        prop_verifier_dir: build_dir.join("data_encryption"),
+        prop_verifier_dir: build_dir.join("prop_verifier"),
+        data_encryption_dir: build_dir.join("data_encryption"),
         data_encryption_limit: args.limit_data_enc_dir,
         key_encryption_dir: build_dir.join("key_encryption"),
         circom_params: CircomParams {
@@ -265,9 +282,11 @@ async fn compile(args: CompileArgs) -> anyhow::Result<()> {
     .map_err(|e| anyhow!("error saving zk config: {e}"))?;
 
     println!("compiling data encryption circuit...");
-    let prop_verification = ZkPropertyVerifier::new(
+    let property_verifier =
+        ZkSampleEntries::new(cfg.prop_verifier_dir.clone(), cfg.data_encryption_limit);
+    let prop_verification = ZkPropertyVerifier2::new(
         &cfg.prop_verifier_dir,
-        cfg.circom_params,
+        property_verifier,
         encryption::Parameters::default_multi(cfg.data_encryption_limit),
     );
     let _ = prop_verification.compile(&mut rand::thread_rng())?;

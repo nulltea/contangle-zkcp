@@ -1,5 +1,6 @@
 use crate::poseidon::get_poseidon_params;
 use crate::{Ciphertext, EncryptCircuit, Parameters, SecretKey};
+use anyhow::anyhow;
 use ark_crypto_primitives::crh::poseidon::constraints::CRHParametersVar;
 use ark_crypto_primitives::crh::poseidon::constraints::{CRHGadget, TwoToOneCRHGadget};
 use ark_crypto_primitives::crh::{poseidon, TwoToOneCRHSchemeGadget};
@@ -22,7 +23,7 @@ use ark_sponge::Absorb;
 use std::collections::HashMap;
 use std::marker::PhantomData;
 
-pub(crate) struct MTConfig<C> {
+pub struct MTConfig<C> {
     _c: PhantomData<C>,
 }
 impl<C: ProjectiveCurve> Config for MTConfig<C>
@@ -94,8 +95,7 @@ where
         sample_idx: usize,
         hash_params: PoseidonParameters<C::BaseField>,
     ) -> Self {
-        let leaves = ciphertext.1.clone().into_iter().map(|e| vec![e]);
-        let tree = MerkleTree::new(&hash_params, &hash_params, leaves).unwrap();
+        let tree = Self::build_merkle_tree(ciphertext.clone(), &hash_params).unwrap();
         let merkle_root = tree.root();
         let sample_leaf = ciphertext.1[sample_idx].clone();
         let merkle_path = tree.generate_proof(sample_idx).unwrap();
@@ -124,6 +124,15 @@ where
         }
     }
 
+    pub fn build_merkle_tree(
+        ciphertext: Ciphertext<C>,
+        hash_params: &PoseidonParameters<C::BaseField>,
+    ) -> anyhow::Result<MerkleTree<MTConfig<C>>> {
+        let leaves = ciphertext.1.into_iter().map(|e| vec![e]);
+        MerkleTree::new(hash_params, hash_params, leaves)
+            .map_err(|e| anyhow!("error building merkle tree: {e}"))
+    }
+
     fn verify_membership(
         &self,
         cs: ConstraintSystemRef<C::BaseField>,
@@ -144,7 +153,7 @@ where
         let merkle_root_var =
             FpVar::<C::BaseField>::new_input(ns!(cs, "merkle_root"), || Ok(&self.merkle_root))?;
         let sample_leaf_var =
-            FpVar::<C::BaseField>::new_witness(ns!(cs, "sample_leaf"), || Ok(&self.sample_leaf))?;
+            FpVar::<C::BaseField>::new_input(ns!(cs, "sample_leaf"), || Ok(&self.sample_leaf))?;
 
         let is_member = path_var
             .verify_membership(

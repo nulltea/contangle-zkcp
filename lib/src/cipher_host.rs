@@ -1,3 +1,4 @@
+use crate::zk::VerifiableEncryption;
 use crate::CipherHost;
 use anyhow::anyhow;
 use async_std::fs;
@@ -21,37 +22,33 @@ impl LocalHost {
 
 #[async_trait]
 impl CipherHost for LocalHost {
-    async fn write(&mut self, cipher: Vec<u8>, proof: Vec<u8>) -> anyhow::Result<()> {
-        fs::write(self.directory.join("ciphertext"), cipher)
-            .await
-            .map_err(|e| anyhow!("error writing ciphertext to local director: {e}"))?;
-
-        fs::write(self.directory.join("proof_of_encryption"), proof)
-            .await
-            .map_err(|e| anyhow!("error reading proof-of-encryption from local director: {e}"))
+    async fn write(&mut self, cipher: VerifiableEncryption) -> anyhow::Result<()> {
+        fs::write(
+            self.directory.join("verifiable_encryption.json"),
+            serde_json::to_vec(&cipher)
+                .map_err(|e| anyhow!("error encoding verifiable encryption: {e}"))?,
+        )
+        .await
+        .map_err(|e| anyhow!("error writing ciphertext to local director: {e}"))
     }
 
-    async fn read(&self) -> anyhow::Result<(Vec<u8>, Vec<u8>)> {
-        let cipher = fs::read(self.directory.join("ciphertext"))
+    async fn read(&self) -> anyhow::Result<VerifiableEncryption> {
+        let cipher = fs::read(self.directory.join("verifiable_encryption.json"))
             .await
             .map_err(|e| anyhow!("error reading ciphertext to local director: {e}"))?;
 
-        let proof = fs::read(self.directory.join("proof_of_encryption"))
-            .await
-            .map_err(|e| anyhow!("error reading proof-of-encryption from local director: {e}"))?;
-
-        Ok((cipher, proof))
+        serde_json::from_slice(&*cipher)
+            .map_err(|e| anyhow!("error decoding verifiable encryption: {e}"))
     }
 
     async fn is_hosted(&self) -> anyhow::Result<bool> {
-        Ok(self.directory.join("ciphertext").exists()
-            && self.directory.join("proof_of_encryption").exists())
+        Ok(self.directory.join("verifiable_encryption.json").exists())
     }
 }
 
 #[derive(Clone)]
 pub struct EphemeralHost {
-    ciphertext_and_proof: Option<(Vec<u8>, Vec<u8>)>,
+    ciphertext_and_proof: Option<VerifiableEncryption>,
 }
 
 impl EphemeralHost {
@@ -64,14 +61,13 @@ impl EphemeralHost {
 
 #[async_trait]
 impl CipherHost for EphemeralHost {
-    async fn write(&mut self, cipher: Vec<u8>, proof: Vec<u8>) -> anyhow::Result<()> {
-        let _ = self.ciphertext_and_proof.insert((cipher, proof));
+    async fn write(&mut self, cipher: VerifiableEncryption) -> anyhow::Result<()> {
+        let _ = self.ciphertext_and_proof.insert(cipher);
         Ok(())
     }
 
-    async fn read(&self) -> anyhow::Result<(Vec<u8>, Vec<u8>)> {
-        let (cipher, proof) = self.ciphertext_and_proof.as_ref().unwrap();
-        Ok((cipher.clone(), proof.clone()))
+    async fn read(&self) -> anyhow::Result<VerifiableEncryption> {
+        Ok(self.ciphertext_and_proof.clone().unwrap())
     }
 
     async fn is_hosted(&self) -> anyhow::Result<bool> {

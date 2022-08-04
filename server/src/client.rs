@@ -4,6 +4,7 @@ use async_trait::async_trait;
 use ecdsa_fun::adaptor::EncryptedSignature;
 use ethers::prelude::Address;
 use ethers::types::H256;
+use scriptless_zkcp::zk::VerifiableEncryption;
 use scriptless_zkcp::{CipherDownloader, Step1Msg};
 use secp256kfun::Point;
 use serde_json::json;
@@ -98,7 +99,7 @@ impl SellerClient {
 
 #[async_trait]
 impl CipherDownloader for SellerClient {
-    async fn download(&self) -> anyhow::Result<(Vec<u8>, Vec<u8>)> {
+    async fn download(&self) -> anyhow::Result<VerifiableEncryption> {
         let mut resp = self
             .client
             .get(format!("step0"))
@@ -112,11 +113,16 @@ impl CipherDownloader for SellerClient {
         let Step0Response {
             ciphertext,
             proof_of_encryption,
+            proofs_of_property,
         } = resp
             .body_json::<Step0Response>()
             .await
             .map_err(|e| anyhow!("error decoding step1 response: {e}"))?;
 
-        return Ok((ciphertext, proof_of_encryption));
+        return Ok(VerifiableEncryption {
+            ciphertext,
+            proof_of_encryption,
+            proofs_of_property,
+        });
     }
 }

@@ -1,6 +1,7 @@
-use crate::encryption::ZkEncryption;
 use crate::traits::ChainProvider;
-use crate::zk::{ZkEncryption, ZkPropertyVerifier};
+use crate::zk::{
+    PropertyVerifier, VerifiableEncryption, ZkEncryption, ZkPropertyVerifier, ZkPropertyVerifier2,
+};
 use crate::{CipherHost, PairingEngine, ProjectiveCurve, ZkConfig};
 use anyhow::anyhow;
 use backoff::ExponentialBackoff;
@@ -13,14 +14,14 @@ use secp256kfun::nonce::Deterministic;
 use secp256kfun::{Point, Scalar};
 use sha2::Sha256;
 
-pub struct Buyer<TChainProvider> {
+pub struct Buyer<TChainProvider, TPropVerifier: PropertyVerifier> {
     chain: TChainProvider,
     wallet: crate::LocalWallet,
     adaptor: Adaptor<HashTranscript<Sha256, ChaCha20Rng>, Deterministic<Sha256>>,
     encrypted_key: Option<Vec<u8>>,
     one_time_pk: Option<Point>,
     encrypted_sig: Option<EncryptedSignature>,
-    data_encryption: ZkPropertyVerifier,
+    data_encryption: ZkPropertyVerifier2<TPropVerifier>,
     key_encryption: ZkEncryption,
 }
 
@@ -29,13 +30,20 @@ pub struct BuyerConfig {
     pub zk: ZkConfig,
 }
 
-impl<TChainProvider: ChainProvider> Buyer<TChainProvider> {
-    pub fn new(cfg: BuyerConfig, chain: TChainProvider, wallet: crate::LocalWallet) -> Self {
+impl<TChainProvider: ChainProvider, TPropVerifier: PropertyVerifier>
+    Buyer<TChainProvider, TPropVerifier>
+{
+    pub fn new(
+        cfg: BuyerConfig,
+        chain: TChainProvider,
+        property_verifier: TPropVerifier,
+        wallet: crate::LocalWallet,
+    ) -> Self {
         let nonce_gen = Deterministic::<Sha256>::default();
         let adaptor = Adaptor::<HashTranscript<Sha256, ChaCha20Rng>, _>::new(nonce_gen);
-        let data_encryption = ZkPropertyVerifier::new_verifier(
-            &cfg.zk.prop_verifier_dir,
-            cfg.zk.circom_params.clone(),
+        let data_encryption = ZkPropertyVerifier2::new_verifier(
+            &cfg.zk.data_encryption_dir,
+            property_verifier,
             encryption::Parameters::default_multi(cfg.zk.data_encryption_limit),
         );
         let key_encryption =
@@ -54,18 +62,8 @@ impl<TChainProvider: ChainProvider> Buyer<TChainProvider> {
     }
 
     /// Step 0: Bob verifies data ciphertext.
-    pub fn step0_verify<
-        CB: AsRef<[u8]>,
-        PB: AsRef<[u8]>,
-        AV: Iterator<Item = (String, Vec<BigInt>)>,
-    >(
-        &self,
-        encrypted_data: CB,
-        proof: PB,
-        additional_values: AV,
-    ) -> anyhow::Result<bool> {
-        self.data_encryption
-            .verify_proof(proof, encrypted_data, additional_values)
+    pub fn step0_verify(&self, proof: &VerifiableEncryption) -> anyhow::Result<bool> {
+        self.data_encryption.verify_proof(proof)
     }
 
     /// Step 2: Bob signs a transaction to transfer coins to Alice address
