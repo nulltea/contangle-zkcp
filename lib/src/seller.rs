@@ -1,15 +1,11 @@
 use crate::traits::ChainProvider;
-use crate::zk::{
-    PropertyVerifier, VerifiableEncryption, ZkEncryption, ZkPropertyVerifier, ZkPropertyVerifier2,
-};
-use crate::{keypair_from_bytes, CipherHost, PairingEngine, ProjectiveCurve, ZkConfig};
+use crate::zk::{PropertyVerifier, VerifiableEncryption, ZkEncryption, ZkPropertyVerifier2};
+use crate::{CipherHost, ZkConfig};
 use anyhow::anyhow;
-use circuits::{ark_to_bytes, bytes_to_plaintext_chunks, encryption};
+use circuits::{ark_to_bytes, encryption};
 use ecdsa_fun::adaptor::{Adaptor, EncryptedSignature, HashTranscript};
 use ethers::prelude::*;
 use futures::channel::{mpsc, oneshot};
-use num_bigint::BigInt;
-use rand::{CryptoRng, Rng};
 use rand_chacha::ChaCha20Rng;
 use secp256kfun::marker::{Mark, Normal};
 use secp256kfun::nonce::Deterministic;
@@ -19,8 +15,7 @@ use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::fs;
 use std::io::Read;
-use std::path::{Path, PathBuf};
-use std::str::FromStr;
+use std::path::PathBuf;
 
 pub struct Seller<TChainProvider, TCipherHost, TPropVerifier: PropertyVerifier> {
     cfg: SellerConfig,

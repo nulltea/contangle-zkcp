@@ -1,17 +1,14 @@
 use crate::traits::ChainProvider;
-use crate::zk::{
-    PropertyVerifier, VerifiableEncryption, ZkEncryption, ZkPropertyVerifier, ZkPropertyVerifier2,
-};
-use crate::{CipherHost, PairingEngine, ProjectiveCurve, ZkConfig};
+use crate::zk::{PropertyVerifier, VerifiableEncryption, ZkEncryption, ZkPropertyVerifier2};
+use crate::ZkConfig;
 use anyhow::anyhow;
 use backoff::ExponentialBackoff;
-use circuits::{ark_from_bytes, encryption, plaintext_chunks_to_bytes, SecretKey};
+use circuits::encryption;
 use ecdsa_fun::adaptor::{Adaptor, EncryptedSignature, HashTranscript};
 use ethers::prelude::{Address, H256};
-use num_bigint::BigInt;
 use rand_chacha::ChaCha20Rng;
 use secp256kfun::nonce::Deterministic;
-use secp256kfun::{Point, Scalar};
+use secp256kfun::Point;
 use sha2::Sha256;
 
 pub struct Buyer<TChainProvider, TPropVerifier: PropertyVerifier> {

@@ -1,23 +1,15 @@
 use crate::zk::traits::PropertyVerifier;
 use crate::zk::ZkEncryption;
 use crate::{
-    read_proving_key, read_verifying_key, write_circuit_artifacts, CurveVar, PairingEngine,
-    ProjectiveCurve, PROVING_KEY_FILE, VERIFYING_KEY_FILE,
+    read_proving_key, read_verifying_key, PairingEngine, ProjectiveCurve, PROVING_KEY_FILE,
+    VERIFYING_KEY_FILE,
 };
 use anyhow::anyhow;
-use ark_circom::{CircomBuilder, CircomConfig};
 use ark_groth16::{Groth16, ProvingKey, VerifyingKey};
-use ark_snark::{CircuitSpecificSetupSNARK, SNARK};
-use circuits::{
-    ark_from_bytes, ark_to_bytes, bytes_to_plaintext_chunks, bytes_to_plaintext_chunks_direct,
-    bytes_to_plaintext_chunks_fixed_size, encryption, CircomWrapper, EncryptCircuit, PublicKey,
-    SecretKey,
-};
-use num_bigint::BigInt;
+use ark_snark::SNARK;
+use circuits::{ark_to_bytes, bytes_to_plaintext_chunks_direct, encryption, PublicKey, SecretKey};
 use rand::{CryptoRng, Rng, RngCore};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
-use std::fs;
 use std::path::{Path, PathBuf};
 
 pub struct ZkPropertyVerifier2<PV: PropertyVerifier> {
@@ -84,7 +76,7 @@ impl<PV: PropertyVerifier> ZkPropertyVerifier2<PV> {
         pk: PublicKey<ProjectiveCurve>,
         mut rng: &mut R,
     ) -> anyhow::Result<VerifiableEncryption> {
-        let mut msg = bytes_to_plaintext_chunks_direct::<ProjectiveCurve, _>(
+        let msg = bytes_to_plaintext_chunks_direct::<ProjectiveCurve, _>(
             msg.as_ref(),
             self.encryption.params.n,
         )

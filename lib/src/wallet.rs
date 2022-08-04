@@ -1,6 +1,5 @@
 use crate::utils::keypair_from_hex;
 use crate::{keypair_gen, read_from_keystore};
-
 use secp256kfun::{Point, Scalar};
 use std::path::Path;
 

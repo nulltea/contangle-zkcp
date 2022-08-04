@@ -8,14 +8,12 @@ use ark_circom::{CircomBuilder, CircomConfig};
 use ark_groth16::{Groth16, ProvingKey, VerifyingKey};
 use ark_snark::{CircuitSpecificSetupSNARK, SNARK};
 use circuits::{
-    ark_from_bytes, ark_to_bytes, bytes_to_plaintext_chunks, bytes_to_plaintext_chunks_direct,
-    bytes_to_plaintext_chunks_fixed_size, encryption, CircomWrapper, EncryptCircuit, PublicKey,
-    SecretKey,
+    ark_from_bytes, ark_to_bytes, bytes_to_plaintext_chunks_direct, encryption, CircomWrapper,
+    PublicKey, SecretKey,
 };
 use num_bigint::BigInt;
 use rand::{CryptoRng, Rng, RngCore};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -103,13 +101,13 @@ impl ZkPropertyVerifier {
         additional_values: AV,
         mut rng: &mut R,
     ) -> anyhow::Result<(Vec<u8>, Vec<u8>)> {
-        let mut msg = bytes_to_plaintext_chunks_direct::<ProjectiveCurve, _>(
+        let msg = bytes_to_plaintext_chunks_direct::<ProjectiveCurve, _>(
             msg.as_ref(),
             self.encryption.params.n,
         )
         .map_err(|e| anyhow!("error casting plaintext: {e}"))?;
 
-        let mut circom_circuit = {
+        let circom_circuit = {
             let mut builder = self.circom_builder.clone();
             msg.clone().into_iter().for_each(|m| {
                 builder.push_variable(self.circom_params.plaintext_field_name.clone(), m)
@@ -177,7 +175,7 @@ impl ZkPropertyVerifier {
             );
 
         Groth16::verify(&verifying_key, &public_inputs, &proof)
-            .map_err(|e| anyhow!("error verifying Groth'16 proof"))
+            .map_err(|_e| anyhow!("error verifying Groth'16 proof"))
     }
 
     pub fn compile<R: Rng + CryptoRng>(

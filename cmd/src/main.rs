@@ -2,7 +2,6 @@
 
 mod args;
 mod mods;
-
 use crate::args::{BuyArgs, CLIArgs, Command, CompileArgs, SellArgs, SetupArgs};
 use anyhow::anyhow;
 use chrono;
@@ -10,19 +9,14 @@ use circuits::encryption;
 use futures_util::TryFutureExt;
 use gumdrop::Options;
 use inquire::{Confirm, Password, Select, Text};
-use num_bigint::BigInt;
 use rocket::http::hyper::body::HttpBody;
-use scriptless_zkcp::zk::{
-    CircomParams, ZkEncryption, ZkPropertyVerifier, ZkPropertyVerifier2, ZkSampleEntries,
-};
+use scriptless_zkcp::zk::{CircomParams, ZkEncryption, ZkPropertyVerifier2, ZkSampleEntries};
 use scriptless_zkcp::{
     cipher_host, keypair_from_bip39, keypair_from_hex, keypair_gen, write_to_keystore, BuyerConfig,
-    CipherDownloader, CipherHost, Ethereum, LocalWallet, PairingEngine, Seller, SellerConfig,
-    Step1Msg, ZkConfig,
+    CipherDownloader, CipherHost, Ethereum, LocalWallet, Seller, SellerConfig, Step1Msg, ZkConfig,
 };
 use scriptless_zkcp::{Buyer, ChainProvider};
 use server::client;
-use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
@@ -97,7 +91,7 @@ async fn sell(args: SellArgs) -> anyhow::Result<()> {
         .parse()
         .map_err(|e| anyhow!("error parsing price: {e}"))?;
 
-    let mut cipher_host = cipher_host::LocalHost::new(&args.cache_dir);
+    let cipher_host = cipher_host::LocalHost::new(&args.cache_dir);
 
     if !Path::new("zk-config.json").exists() {
         return Err(anyhow!(
@@ -111,7 +105,7 @@ async fn sell(args: SellArgs) -> anyhow::Result<()> {
         zk: serde_json::from_slice(
             &*fs::read("zk-config.json").expect("expect zk-config.json to exist"),
         )
-        .map_err(|e| anyhow!("error unmarshalling zk-config.json"))?,
+        .map_err(|_e| anyhow!("error unmarshalling zk-config.json"))?,
     };
     let property_verifier = ZkSampleEntries::new(
         cfg.zk.prop_verifier_dir.clone(),
@@ -183,7 +177,7 @@ async fn buy(args: BuyArgs) -> anyhow::Result<()> {
         zk: serde_json::from_slice(
             &*fs::read("zk-config.json").expect("expect zk-config.json to exist"),
         )
-        .map_err(|e| anyhow!("error unmarshalling zk-config.json"))?,
+        .map_err(|_e| anyhow!("error unmarshalling zk-config.json"))?,
     };
 
     let property_verifier = ZkSampleEntries::new(

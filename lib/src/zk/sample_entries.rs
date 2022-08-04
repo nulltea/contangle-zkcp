@@ -1,29 +1,22 @@
-use crate::zk::{ProofOfProperty, PropertyVerifier, VerifiableEncryption, ZkEncryption};
+use crate::zk::{ProofOfProperty, PropertyVerifier};
 use crate::{
     read_proving_key, read_verifying_key, write_circuit_artifacts, CurveVar, Fq, PairingEngine,
     ProjectiveCurve as Curve, PROVING_KEY_FILE, VERIFYING_KEY_FILE,
 };
 use anyhow::anyhow;
-use ark_circom::{CircomBuilder, CircomConfig};
 use ark_ec::ProjectiveCurve;
 use ark_ed_on_bls12_381::Fr;
+use ark_ff::{ToConstraintField, Zero};
 use ark_groth16::{Groth16, ProvingKey, VerifyingKey};
+use ark_serialize::SerializationError;
 use ark_snark::{CircuitSpecificSetupSNARK, SNARK};
 use circuits::poseidon::get_poseidon_params;
 use circuits::{
-    ark_from_bytes, ark_to_bytes, bytes_to_plaintext_chunks, bytes_to_plaintext_chunks_direct,
-    bytes_to_plaintext_chunks_fixed_size, encryption, Ciphertext, CircomWrapper, EncryptCircuit,
-    Plaintext, PublicKey, SampleEntries, SecretKey,
+    ark_from_bytes, ark_to_bytes, encryption, Ciphertext, Plaintext, SampleEntries, SecretKey,
 };
-use num_bigint::BigInt;
 use rand::{CryptoRng, Rng, RngCore};
-use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
-// use ark_ec::ProjectiveCurve;
-use ark_ff::{ToConstraintField, Zero};
-use ark_serialize::SerializationError;
 
 pub struct ZkSampleEntries {
     build_dir: PathBuf,
@@ -69,8 +62,8 @@ impl ZkSampleEntries {
 impl PropertyVerifier for ZkSampleEntries {
     fn assess_plaintext<R: CryptoRng + RngCore>(
         &self,
-        plaintext: Plaintext<Curve>,
-        rng: &mut R,
+        _plaintext: Plaintext<Curve>,
+        _rng: &mut R,
     ) -> anyhow::Result<Vec<ProofOfProperty>> {
         return Ok(vec![]);
     }
@@ -124,7 +117,7 @@ impl PropertyVerifier for ZkSampleEntries {
             .into_iter()
             .map(|(_, a)| ark_from_bytes(a))
             .collect::<Result<Vec<_>, SerializationError>>()
-            .map_err(|e| anyhow!("error decoding proof argument to scalar"))?;
+            .map_err(|_e| anyhow!("error decoding proof argument to scalar"))?;
         public_inputs.append(&mut sample_value);
         let verifying_key = self
             .verifying_key

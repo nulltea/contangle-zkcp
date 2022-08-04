@@ -2,7 +2,6 @@ use crate::zk::ProofOfProperty;
 use crate::{Fq, PairingEngine, ProjectiveCurve};
 use ark_groth16::{ProvingKey, VerifyingKey};
 use circuits::{Ciphertext, Plaintext, SecretKey};
-use num_bigint::BigInt;
 use rand::{CryptoRng, Rng, RngCore};
 
 pub trait PropertyVerifier {

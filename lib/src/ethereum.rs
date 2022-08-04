@@ -2,14 +2,12 @@ use crate::traits::ChainProvider;
 use anyhow::anyhow;
 use async_trait::async_trait;
 use ethers::prelude::*;
+pub use ethers::utils::WEI_IN_ETHER;
 use ethers::utils::{keccak256, parse_ether};
+use k256::elliptic_curve::sec1::ToEncodedPoint;
+use k256::PublicKey;
 use secp256kfun::{marker::*, Point, Scalar};
 use url::Url;
-
-pub use ethers::utils::WEI_IN_ETHER;
-use k256::ecdsa::VerifyingKey;
-use k256::elliptic_curve::sec1::ToEncodedPoint;
-use k256::{EncodedPoint as K256PublicKey, PublicKey};
 
 pub struct Ethereum {
     provider: Provider<Http>,
@@ -22,7 +20,7 @@ impl Ethereum {
         let chain_id = provider
             .get_chainid()
             .await
-            .map_err(|e| anyhow!("error making request to the specified Ethereum RPC address"))?;
+            .map_err(|_e| anyhow!("error making request to the specified Ethereum RPC address"))?;
 
         Ok(Self {
             provider,

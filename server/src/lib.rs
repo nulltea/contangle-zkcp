@@ -11,11 +11,9 @@ use rocket::http::Status;
 use rocket::response::status;
 use rocket::serde::{json::Json, Deserialize, Serialize};
 use rocket::State;
-use scriptless_zkcp::{SellerMsg, Step1Msg};
-
-use secp256kfun::Point;
-
 use scriptless_zkcp::zk::{ProofOfProperty, VerifiableEncryption};
+use scriptless_zkcp::{SellerMsg, Step1Msg};
+use secp256kfun::Point;
 use std::str::FromStr;
 
 struct Runtime {
