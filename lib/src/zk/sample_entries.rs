@@ -15,8 +15,8 @@ use circuits::{
     ark_from_bytes, ark_to_bytes, encryption, Ciphertext, Plaintext, SampleEntries, SecretKey,
 };
 use rand::{CryptoRng, Rng, RngCore};
-use std::fs;
 use std::path::{Path, PathBuf};
+use std::{fs, iter};
 
 pub struct ZkSampleEntries {
     build_dir: PathBuf,
@@ -31,7 +31,7 @@ impl ZkSampleEntries {
             read_proving_key(build_dir.as_ref().join(PROVING_KEY_FILE)).map_or(None, |k| Some(k));
         let verifying_key = proving_key.as_ref().map(|pk| pk.vk.clone());
 
-        assert_eq!(n % 2, 0);
+        assert_eq!((n & (n - 1)), 0);
 
         Self {
             build_dir: PathBuf::from(build_dir.as_ref()),
@@ -80,7 +80,7 @@ impl PropertyVerifier for ZkSampleEntries {
             SampleEntries::<_, CurveVar>::new(ciphertext, sk, 1, self.params.poseidon.clone());
         let proving_key = self.proving_key.as_ref().expect("proving key expected");
 
-        let sample_value = ark_to_bytes(circuit.sample_value.clone())
+        let sample_value = ark_to_bytes(circuit.sample_entry.clone())
             .map_err(|e| anyhow!("error encoding ciphertext: {e}"))?;
 
         let proof = Groth16::<PairingEngine>::prove(proving_key, circuit, &mut rng)
@@ -106,11 +106,7 @@ impl PropertyVerifier for ZkSampleEntries {
         )
     }
 
-    fn verify_proof(
-        &self,
-        args: ProofOfProperty,
-        mut public_inputs: Vec<Fq>,
-    ) -> anyhow::Result<bool> {
+    fn verify_proof(&self, args: ProofOfProperty, public_inputs: Vec<Fq>) -> anyhow::Result<bool> {
         let proof = ark_from_bytes(args.proof)?;
         let mut sample_value = args
             .arguments
@@ -118,7 +114,10 @@ impl PropertyVerifier for ZkSampleEntries {
             .map(|(_, a)| ark_from_bytes(a))
             .collect::<Result<Vec<_>, SerializationError>>()
             .map_err(|_e| anyhow!("error decoding proof argument to scalar"))?;
-        public_inputs.append(&mut sample_value);
+        let public_inputs = sample_value
+            .into_iter()
+            .chain(public_inputs)
+            .collect::<Vec<_>>();
         let verifying_key = self
             .verifying_key
             .as_ref()

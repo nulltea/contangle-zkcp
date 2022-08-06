@@ -75,7 +75,7 @@ where
     merkle_path: merkle_tree::Path<MTConfig<C>>,
     sample_idx: usize,
     sample_leaf: C::BaseField,
-    pub sample_value: C::BaseField,
+    pub sample_entry: C::BaseField,
     sk: SecretKey<C>,
     hash_params: PoseidonParameters<C::BaseField>,
     _curve_var: PhantomData<CV>,
@@ -117,7 +117,7 @@ where
             merkle_path,
             sample_idx,
             sample_leaf,
-            sample_value,
+            sample_entry: sample_value,
             sk,
             hash_params,
             _curve_var: PhantomData,
@@ -136,6 +136,7 @@ where
     fn verify_membership(
         &self,
         cs: ConstraintSystemRef<C::BaseField>,
+        leaf: FpVar<C::BaseField>,
     ) -> Result<(), SynthesisError> {
         let poseidon_param_var =
             CRHParametersVar::new_constant(cs.clone(), &self.hash_params).unwrap();
@@ -152,15 +153,13 @@ where
 
         let merkle_root_var =
             FpVar::<C::BaseField>::new_input(ns!(cs, "merkle_root"), || Ok(&self.merkle_root))?;
-        let sample_leaf_var =
-            FpVar::<C::BaseField>::new_input(ns!(cs, "sample_leaf"), || Ok(&self.sample_leaf))?;
 
         let is_member = path_var
             .verify_membership(
                 &hash_param_var.leaf_params,
                 &hash_param_var.inner_params,
                 &merkle_root_var,
-                &[sample_leaf_var],
+                &[leaf],
             )
             .unwrap();
 
@@ -170,11 +169,11 @@ where
     fn compare_decrypted(
         &self,
         cs: ConstraintSystemRef<C::BaseField>,
-        ciphertext: (CV, Vec<FpVar<C::BaseField>>),
+        ciphertext: (CV, FpVar<C::BaseField>),
         sample_val: FpVar<C::BaseField>,
     ) -> Result<(), SynthesisError> {
         let c1 = ciphertext.0;
-        let c2 = &ciphertext.1[self.sample_idx];
+        let c2 = &ciphertext.1;
 
         let sk = to_bytes![&self.sk].unwrap();
         let sk = UInt8::new_witness_vec(ns!(cs, "secret_key"), &sk)?
@@ -199,16 +198,13 @@ where
         &self,
         cs: ConstraintSystemRef<C::BaseField>,
         mode: AllocationMode,
-    ) -> Result<(CV, Vec<FpVar<C::BaseField>>), SynthesisError> {
+    ) -> Result<(CV, FpVar<C::BaseField>), SynthesisError> {
         let c1 = CV::new_variable(ns!(cs, "ciphertext"), || Ok(self.ciphertext.0), mode)?;
-        let c2 = self
-            .ciphertext
-            .1
-            .iter()
-            .map(|c| {
-                FpVar::<C::BaseField>::new_variable(ns!(cs, "ciphertext"), || Ok(c.clone()), mode)
-            })
-            .collect::<Result<_, _>>()?;
+        let c2 = FpVar::<C::BaseField>::new_variable(
+            ns!(cs, "sample_leaf"),
+            || Ok(&self.sample_leaf),
+            mode,
+        )?;
 
         Ok((c1, c2))
     }
@@ -227,10 +223,10 @@ where
         cs: ConstraintSystemRef<C::BaseField>,
     ) -> Result<(), SynthesisError> {
         let sample_value =
-            FpVar::<C::BaseField>::new_input(ns!(cs, "sample_entry"), || Ok(self.sample_value))?;
-        let ciphertext = self.ciphertext_var(cs.clone(), AllocationMode::Input)?;
+            FpVar::<C::BaseField>::new_input(ns!(cs, "sample_entry"), || Ok(self.sample_entry))?;
+        let ciphertext = self.ciphertext_var(cs.clone(), AllocationMode::Witness)?;
 
-        self.verify_membership(cs.clone())?;
+        self.verify_membership(cs.clone(), ciphertext.1.clone())?;
 
         self.compare_decrypted(cs.clone(), ciphertext, sample_value)
     }

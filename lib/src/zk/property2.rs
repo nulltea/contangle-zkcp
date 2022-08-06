@@ -45,7 +45,7 @@ impl<PV: PropertyVerifier> ZkPropertyVerifier2<PV> {
 
         Self {
             build_dir: PathBuf::from(build_dir.as_ref()),
-            encryption: ZkEncryption::new_inner(enc_params),
+            encryption: ZkEncryption::new(build_dir, enc_params),
             verifier,
             proving_key,
             verifying_key,
@@ -62,7 +62,7 @@ impl<PV: PropertyVerifier> ZkPropertyVerifier2<PV> {
 
         Self {
             build_dir: PathBuf::from(build_dir.as_ref()),
-            encryption: ZkEncryption::new_inner(enc_params),
+            encryption: ZkEncryption::new_verifier(build_dir, enc_params),
             verifier,
             proving_key: None,
             verifying_key: Some(verifying_key),

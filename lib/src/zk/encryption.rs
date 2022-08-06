@@ -8,7 +8,8 @@ use ark_groth16::{Groth16, ProvingKey, VerifyingKey};
 use ark_snark::{CircuitSpecificSetupSNARK, SNARK};
 use ark_std::UniformRand;
 use circuits::{
-    ark_from_bytes, ark_to_bytes, bytes_to_plaintext_chunks, encryption, plaintext_chunks_to_bytes, EncryptCircuit, Plaintext, PublicKey, SecretKey,
+    ark_from_bytes, ark_to_bytes, bytes_to_plaintext_chunks, encryption, plaintext_chunks_to_bytes,
+    EncryptCircuit, Plaintext, PublicKey, SecretKey,
 };
 use rand::{CryptoRng, Rng, RngCore};
 use secp256kfun::{Point, Scalar};

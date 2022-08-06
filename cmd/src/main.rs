@@ -126,7 +126,8 @@ async fn sell(args: SellArgs) -> anyhow::Result<()> {
             .unwrap_or_else(|| Text::new("File to be sold:").prompt().unwrap());
 
         let data = fs::read(data_path).map_err(|e| anyhow!("error reading data: {e}"))?;
-        let data = mods::image_to_bytes(data)?;
+        let data: Vec<String> = serde_json::from_slice(&*data).unwrap();
+        let data = data.into_iter().map(|e| e.parse().unwrap()).collect();
         seller.step0_setup(data).await?;
     } else {
         println!("encrypted data was restored from cache.");
@@ -224,6 +225,7 @@ async fn buy(args: BuyArgs) -> anyhow::Result<()> {
     let tx_hash = client.step3(pub_key, enc_sig).await?;
 
     let data = buyer.step4(tx_hash, encrypted_data.ciphertext).await?;
+    let data = serde_json::to_vec(&data).unwrap();
 
     let data_path = args.data_path.unwrap_or_else(|| {
         Text::new("File decrypted! Where to save the result?:")
@@ -279,7 +281,7 @@ async fn compile(args: CompileArgs) -> anyhow::Result<()> {
     let property_verifier =
         ZkSampleEntries::new(cfg.prop_verifier_dir.clone(), cfg.data_encryption_limit);
     let prop_verification = ZkPropertyVerifier2::new(
-        &cfg.prop_verifier_dir,
+        &cfg.data_encryption_dir,
         property_verifier,
         encryption::Parameters::default_multi(cfg.data_encryption_limit),
     );
