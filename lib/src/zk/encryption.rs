@@ -4,12 +4,12 @@ use crate::{
 };
 use anyhow::anyhow;
 use ark_ff::Field;
-use ark_groth16::{Groth16, Proof, ProvingKey, VerifyingKey};
+use ark_groth16::{Groth16, ProvingKey, VerifyingKey};
 use ark_snark::{CircuitSpecificSetupSNARK, SNARK};
 use ark_std::UniformRand;
 use circuits::{
     ark_from_bytes, ark_to_bytes, bytes_to_plaintext_chunks, encryption, plaintext_chunks_to_bytes,
-    Ciphertext, EncryptCircuit, Plaintext, PublicKey, SecretKey,
+    EncryptCircuit, Plaintext, PublicKey, SecretKey,
 };
 use rand::{CryptoRng, Rng, RngCore};
 use secp256kfun::{Point, Scalar};
@@ -68,7 +68,7 @@ impl ZkEncryption {
         pk: PublicKey<ProjectiveCurve>,
         mut rng: &mut R,
     ) -> anyhow::Result<(Vec<u8>, Vec<u8>)> {
-        let mut msg = bytes_to_plaintext_chunks::<ProjectiveCurve, _>(msg.as_ref())
+        let msg = bytes_to_plaintext_chunks::<ProjectiveCurve, _>(msg.as_ref())
             .map_err(|e| anyhow!("error casting plaintext: {e}"))?;
         let circuit = self.build_circuit(msg, pk, &mut rng)?;
         let ciphertext = circuit.resulted_ciphertext.clone();
@@ -150,7 +150,7 @@ impl ZkEncryption {
         >(&ciphertext, &self.params);
 
         Groth16::verify(&verifying_key, &public_inputs, &proof)
-            .map_err(|e| anyhow!("error verifying Groth'16 proof"))
+            .map_err(|_e| anyhow!("error verifying Groth'16 proof"))
     }
 
     pub fn compile<R: Rng + CryptoRng>(

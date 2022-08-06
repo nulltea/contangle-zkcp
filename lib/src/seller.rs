@@ -1,13 +1,11 @@
 use crate::traits::ChainProvider;
-use crate::{
-    keypair_from_bytes, CipherHost, PairingEngine, ProjectiveCurve, ZkConfig, ZkPropertyVerifier,
-};
+use crate::zk::{PropertyVerifier, VerifiableEncryption, ZkEncryption, ZkPropertyVerifier2};
+use crate::{CipherHost, ZkConfig};
 use anyhow::anyhow;
+use circuits::{ark_to_bytes, encryption};
 use ecdsa_fun::adaptor::{Adaptor, EncryptedSignature, HashTranscript};
 use ethers::prelude::*;
 use futures::channel::{mpsc, oneshot};
-use num_bigint::BigInt;
-use rand::{CryptoRng, Rng};
 use rand_chacha::ChaCha20Rng;
 use secp256kfun::marker::{Mark, Normal};
 use secp256kfun::nonce::Deterministic;
@@ -17,12 +15,9 @@ use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::fs;
 use std::io::Read;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
-use crate::zk_encryption::ZkEncryption;
-use circuits::{ark_to_bytes, bytes_to_plaintext_chunks, encryption};
-
-pub struct Seller<TChainProvider, TCipherHost> {
+pub struct Seller<TChainProvider, TCipherHost, TPropVerifier: PropertyVerifier> {
     cfg: SellerConfig,
     adaptor: Adaptor<HashTranscript<Sha256, ChaCha20Rng>, Deterministic<Sha256>>,
     chain: TChainProvider,
@@ -31,7 +26,7 @@ pub struct Seller<TChainProvider, TCipherHost> {
     from_buyers: mpsc::Receiver<SellerMsg>,
     one_time_keys: HashMap<Address, Scalar>,
     decryption_key: Option<Vec<u8>>,
-    property_verifier: ZkPropertyVerifier,
+    property_verifier: ZkPropertyVerifier2<TPropVerifier>,
     key_encryption: ZkEncryption,
 }
 
@@ -39,7 +34,7 @@ pub enum SellerMsg {
     /// Step 0: Alice encrypts data and generates Proof-of-Encryption (PoE);
     /// Bob requests ciphertext and verifies proof.
     Step0 {
-        resp_tx: oneshot::Sender<anyhow::Result<Step0Msg>>,
+        resp_tx: oneshot::Sender<anyhow::Result<VerifiableEncryption>>,
     },
     /// Step 1:Alice generates new key pair, encrypt data decryption key with it, and sends public key and ciphertext to Bob.
     Step1 {
@@ -52,11 +47,6 @@ pub enum SellerMsg {
         enc_sig: EncryptedSignature,
         resp_tx: oneshot::Sender<anyhow::Result<H256>>,
     },
-}
-
-pub struct Step0Msg {
-    pub ciphertext: Vec<u8>,
-    pub proof_of_encryption: Vec<u8>,
 }
 
 pub struct Step1Msg {
@@ -73,11 +63,14 @@ pub struct SellerConfig {
     pub zk: ZkConfig,
 }
 
-impl<TChainProvider: ChainProvider, TCipherHost: CipherHost> Seller<TChainProvider, TCipherHost> {
+impl<TChainProvider: ChainProvider, TCipherHost: CipherHost, TPropVerifier: PropertyVerifier>
+    Seller<TChainProvider, TCipherHost, TPropVerifier>
+{
     pub fn new(
         cfg: SellerConfig,
         chain: TChainProvider,
         cipher_host: TCipherHost,
+        property_verifier: TPropVerifier,
         wallet: crate::LocalWallet,
     ) -> anyhow::Result<(Self, mpsc::Sender<SellerMsg>)> {
         let nonce_gen = Deterministic::<Sha256>::default();
@@ -85,9 +78,9 @@ impl<TChainProvider: ChainProvider, TCipherHost: CipherHost> Seller<TChainProvid
         let (to_seller, from_buyers) = mpsc::channel(1);
         let decryption_key =
             fs::read(cfg.cache_dir.join("decryption_key")).map_or(None, |b| Some(b));
-        let property_verifier = ZkPropertyVerifier::new(
-            &cfg.zk.prop_verifier_dir,
-            cfg.zk.circom_params.clone(),
+        let property_verifier = ZkPropertyVerifier2::new(
+            &cfg.zk.data_encryption_dir,
+            property_verifier,
             encryption::Parameters::default_multi(cfg.zk.data_encryption_limit),
         );
         let key_encryption = ZkEncryption::new(&cfg.zk.key_encryption_dir, Default::default());
@@ -111,8 +104,8 @@ impl<TChainProvider: ChainProvider, TCipherHost: CipherHost> Seller<TChainProvid
     pub async fn step0_setup(&mut self, data: Vec<u8>) -> anyhow::Result<()> {
         let (sk, pk) = self.property_verifier.keygen(&mut rand::thread_rng())?;
 
-        let sk_bytes =
-            ark_to_bytes(sk).map_err(|e| anyhow!("error encoding elgamal secret key: {e}"))?;
+        let sk_bytes = ark_to_bytes(sk.clone())
+            .map_err(|e| anyhow!("error encoding elgamal secret key: {e}"))?;
 
         fs::create_dir_all(&self.cfg.cache_dir).expect("expected dir to be created");
         fs::write(
@@ -121,19 +114,14 @@ impl<TChainProvider: ChainProvider, TCipherHost: CipherHost> Seller<TChainProvid
         )
         .map_err(|e| anyhow!("error caching decryption key: {e}"))?;
 
-        let addt_vals = HashMap::new();
-        let (encrypted_data, proof_of_encryption) =
-            self.property_verifier.assess_property_and_encrypt(
-                data,
-                pk,
-                addt_vals.into_iter(),
-                &mut rand::thread_rng(),
-            )?;
+        let verifiable_encryption = self.property_verifier.assess_property_and_encrypt(
+            data,
+            sk,
+            pk,
+            &mut rand::thread_rng(),
+        )?;
 
-        let _ = self
-            .cipher_host
-            .write(encrypted_data, proof_of_encryption)
-            .await;
+        let _ = self.cipher_host.write(verifiable_encryption).await;
 
         Ok(())
     }
@@ -143,12 +131,7 @@ impl<TChainProvider: ChainProvider, TCipherHost: CipherHost> Seller<TChainProvid
             if let Some(msg) = self.from_buyers.next().await {
                 match msg {
                     SellerMsg::Step0 { resp_tx } => {
-                        let _ = resp_tx.send(self.cipher_host.read().await.map(
-                            |(ciphertext, proof_of_encryption)| Step0Msg {
-                                ciphertext,
-                                proof_of_encryption,
-                            },
-                        )); // todo: DoS defense needed.
+                        let _ = resp_tx.send(self.cipher_host.read().await); // todo: DoS defense needed.
                     }
                     SellerMsg::Step1 { address, resp_tx } => {
                         let (elgamal_pk, data_sk, data_pk) = self

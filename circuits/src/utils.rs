@@ -57,6 +57,20 @@ pub fn bytes_to_plaintext_chunks_fixed_size<C: ProjectiveCurve, B: AsRef<[u8]>>(
         .collect())
 }
 
+pub fn bytes_to_plaintext_chunks_direct<C: ProjectiveCurve, B: AsRef<[u8]>>(
+    bytes: B,
+    size: usize,
+) -> anyhow::Result<Plaintext<C>> {
+    let plaintext: Vec<_> = bytes
+        .as_ref()
+        .into_iter()
+        .map(|b| C::BaseField::from(*b as u128))
+        .collect();
+    Ok((0..size)
+        .map(|i| plaintext.get(i).map_or(C::BaseField::zero(), |c| *c))
+        .collect())
+}
+
 pub fn plaintext_chunks_to_bytes<C: ProjectiveCurve>(
     chunks: Plaintext<C>,
 ) -> anyhow::Result<Vec<u8>> {

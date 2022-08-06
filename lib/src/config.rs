@@ -1,4 +1,4 @@
-use crate::CircomParams;
+use crate::zk::CircomParams;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -8,6 +8,7 @@ pub const VERIFYING_KEY_FILE: &str = "verification.key";
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ZkConfig {
     pub prop_verifier_dir: PathBuf,
+    pub data_encryption_dir: PathBuf,
     pub data_encryption_limit: usize,
     pub key_encryption_dir: PathBuf,
     pub circom_params: CircomParams,
