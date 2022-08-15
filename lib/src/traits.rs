@@ -35,3 +35,5 @@ pub trait CipherHost {
 pub trait CipherDownloader {
     async fn download(&self) -> anyhow::Result<VerifiableEncryption>;
 }
+
+pub trait DataAdaptor {}

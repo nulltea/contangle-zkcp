@@ -4,5 +4,6 @@ members = [
     "cmd",
     "lib",
     "circuits",
+    "circuits-halo2",
     "server"
 ]
