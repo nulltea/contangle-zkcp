@@ -1,10 +1,10 @@
 use crate::encryption::AddInstruction;
+use halo2_proofs::pasta::pallas;
 use halo2_proofs::{
     circuit::{AssignedCell, Chip, Layouter},
     plonk::{self, Advice, Column, ConstraintSystem, Constraints, Selector},
     poly::Rotation,
 };
-use pasta_curves::pallas;
 
 #[derive(Clone, Debug)]
 pub struct AddConfig {
@@ -15,6 +15,7 @@ pub struct AddConfig {
 }
 
 /// A chip implementing a single addition constraint `c = a + b` on a single row.
+#[derive(Clone, Debug)]
 pub struct AddChip {
     config: AddConfig,
 }
@@ -52,7 +53,7 @@ impl AddChip {
         AddConfig { a, b, c, q_add }
     }
 
-    pub(in crate::circuit) fn construct(config: AddConfig) -> Self {
+    pub fn construct(config: AddConfig) -> Self {
         Self { config }
     }
 }

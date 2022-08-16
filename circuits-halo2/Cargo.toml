@@ -6,8 +6,12 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+anyhow = "1.0.58"
 halo2_gadgets = "0.2"
 halo2_proofs = "0.2"
 group = "0.11"
 ff = "0.11"
-pasta_curves = "0.2.1"
+pasta_curves = "0.4"
+lazy_static = "1.4.0"
+
+ark-std = { version = "^0.3.0", default-features = false }
