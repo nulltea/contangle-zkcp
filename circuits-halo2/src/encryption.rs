@@ -23,7 +23,9 @@ use std::ffi::c_void;
 use std::ops::{Mul, MulAssign};
 
 // Absolute offsets for public inputs.
-const C1: usize = 0;
+const C1_X: usize = 0;
+const C1_Y: usize = 1;
+const C2: usize = 2;
 
 /// An instruction set for adding two circuit words (field elements).
 pub trait AddInstruction<F: FieldExt>: Chip<F> {
@@ -50,7 +52,9 @@ struct ElGamalConfig {
     add_config: AddConfig,
     plaintext_col: Column<Advice>,
     ciphertext_res_col: Column<Advice>,
-    ciphertext_exp_col: Column<Instance>,
+    ciphertext_c1x_exp_col: Column<Instance>,
+    ciphertext_c1y_exp_col: Column<Instance>,
+    ciphertext_c2_exp_col: Column<Instance>,
 }
 
 impl Chip<pallas::Base> for ElGamalChip {
@@ -127,12 +131,22 @@ impl ElGamalChip {
             rc_b,
         );
 
-        let plaintext_col = meta.advice_column();
-        let ciphertext_res_col = meta.advice_column();
         let dh_col = meta.advice_column();
+        meta.enable_equality(dh_col);
+        let plaintext_col = meta.advice_column();
+        meta.enable_equality(plaintext_col);
+        let ciphertext_res_col = meta.advice_column();
+        meta.enable_equality(ciphertext_res_col);
+
         let add_config = AddChip::configure(meta, dh_col, plaintext_col, ciphertext_res_col);
 
-        let ciphertext_exp_col = meta.instance_column();
+        let ciphertext_c1x_exp_col = meta.instance_column();
+        let ciphertext_c1y_exp_col = meta.instance_column();
+        meta.enable_equality(ciphertext_c1x_exp_col);
+        meta.enable_equality(ciphertext_c1y_exp_col);
+
+        let ciphertext_c2_exp_col = meta.instance_column();
+        meta.enable_equality(ciphertext_c2_exp_col);
 
         ElGamalConfig {
             poseidon_config,
@@ -140,7 +154,9 @@ impl ElGamalChip {
             add_config,
             plaintext_col,
             ciphertext_res_col,
-            ciphertext_exp_col,
+            ciphertext_c1x_exp_col,
+            ciphertext_c1y_exp_col,
+            ciphertext_c2_exp_col,
         }
     }
 }
@@ -213,7 +229,7 @@ impl ElGamalGadget {
             .witness_point(&mut layouter, Value::known(c1))
             .unwrap();
 
-        // dh = poseidon_hash(randomness*pk)
+        // compute dh = poseidon_hash(randomness*pk)
         let dh = {
             let poseidon_message = [s.x(), s.y()];
             let poseidon_hasher =
@@ -224,8 +240,7 @@ impl ElGamalGadget {
             )?
         };
 
-        // Add hash output to psi.
-        // `scalar` = poseidon_hash(nk, rho) + psi.
+        // compute c2 = poseidon_hash(nk, rho) + psi.
         let c2 = add_chip.add(
             layouter.namespace(|| "c2 = poseidon_hash(randomness*pk) + m"),
             &dh,
@@ -273,15 +288,17 @@ impl Circuit<pallas::Base> for ElGamalGadget {
             &msg_var,
         )?;
 
-        let msg_var = layouter.constrain_instance(c2.cell(), config.ciphertext_exp_col, C1);
-
-        Ok(())
+        layouter
+            .constrain_instance(c1.x().cell(), config.ciphertext_c1x_exp_col, C1_X)
+            .and(layouter.constrain_instance(c1.y().cell(), config.ciphertext_c1y_exp_col, C1_Y))
+            .and(layouter.constrain_instance(c2.cell(), config.ciphertext_c2_exp_col, C2))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use anyhow::anyhow;
     use ark_std::test_rng;
     use halo2_proofs::arithmetic::Field;
 
@@ -302,7 +319,21 @@ mod tests {
             pk,
             resulted_ciphertext,
         };
-        let public_inputs = vec![vec![circuit.resulted_ciphertext.1]];
-        let prover = MockProver::run(12, &circuit, public_inputs).unwrap();
+
+        let c1_coordinates = circuit
+            .resulted_ciphertext
+            .0
+            .to_affine()
+            .coordinates()
+            .map(|c| vec![c.x().clone(), c.y().clone()])
+            .unwrap();
+        let public_inputs = vec![
+            vec![c1_coordinates[0]],
+            vec![c1_coordinates[1]],
+            vec![circuit.resulted_ciphertext.1],
+        ];
+        let prover = MockProver::run(12, &circuit, public_inputs)
+            .map_err(|e| anyhow!("error: {}", e))
+            .unwrap();
     }
 }
