@@ -3,7 +3,7 @@
 members = [
     "cmd",
     "lib",
-    "circuits",
+    "circuits-ark",
     "circuits-halo2",
     "server"
 ]

@@ -24,4 +24,4 @@ num-bigint = "0.4.3"
 
 scriptless-zkcp = { path = "../lib" }
 server = { path = "../server" }
-circuits = { path = "../circuits" }
+circuits = { path = "../circuits-ark" }

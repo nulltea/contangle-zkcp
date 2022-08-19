@@ -39,7 +39,7 @@ ark-ed-on-bls12-381 = { version = "0.3.0", default-features = false, features = 
 ark-bls12-381 = { version = "0.3.0" }
 ark-serialize = { version = "0.3.0", default-features = false }
 
-circuits = { path = "../circuits" }
+circuits = { path = "../circuits-ark" }
 ark-circom = { path = "../../ark-circom", features = [ "circom-2" ] }
 # ark-circom = { git = "https://github.com/timoth-y/ark-circom.git", branch = "rewired", features = [ "circom-2" ] }
 
