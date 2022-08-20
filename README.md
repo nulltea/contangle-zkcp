@@ -10,7 +10,13 @@ The innovation of `Contangle` goes from employing multiple novel cryptographic p
 
 
 ## Protocol
-Please see the [protocol documentation](/docs/protocol.md) for how it works.
+The high-level flow of ZKCP protocol is as such:
+1. Alice generates a key pair $(sk, pk)$ and encrypts data with public key inside a ZK circuit to generate Proof of Encryption (*PoE*) and Proof(s) of Property (*PoPRP*). She then sends proofs, and ciphertext to Bob.
+2. Bob verifies given proofs and signs transaction $tx$ that transfers coins to Alice’s address
+3. Bob sends $tx$ into a special fair-exchange channel $C_{FE}$. Alice sends decryption key into $C_{FE}$. Channel ensures that either both parties receive desired or no one at all.
+4. Bob uses $sk$ and decrypt purchased data from the ciphertext, while Alice broadcasts signed transaction $tx$ on Bob's behalf, thereby gets paid.
+
+Please see the [protocol documentation](/blob/master/docs/protocol.md) for more details on how Contangle implements the framework above.
 
 ## License
 MIT

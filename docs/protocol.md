@@ -5,12 +5,6 @@ Bob doesn't trust Alice claiming the quality of item and wether she gets access 
 
 They come to an agreement to do the exchange.
 
-## Abstracted flow
-The generalized flow of ZKCP protocol is as such:
-1. Alice generates a keypair $pk,sk$ and encrypts data $M$ with $pk$ inside a ZK circuit to generate Proof of Encryption ($PoE$) and Proof(s) of Property (PoPRP). She then sends $PoE$, and ciphertext $m$ to Bob.
-2. Bob verifies proofs $PoE$ and $PoPRP$ and sends signed transaction $tx$ that transfers coins to Alice’s address into a special fair-exchange channel $fc$. Alice sends decryption key $sk$. Channel ensures that either both parties receive desired or no one at all.
-3. Bob uses $sk$ and decrypt desired data $M$ from the ciphertext $m$, while broadcasts signed transaction $tx$ on Bob's behalf, thus gets paid.
-
 ## Proof of Encryption
 For the Proof of Encryption we introduce two circuits:
 - `ElGamalCircuit` implements an [ElGamal](http://wwwmayr.in.tum.de/konferenzen/Jass05/courses/1/papers/meier_paper.pdf) asymmetric encryption scheme using elliptic curve group elements and SNARK-friendly hash function (Poseidon Sponge).
