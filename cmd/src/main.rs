@@ -1,7 +1,6 @@
 #![feature(async_closure)]
 
 mod args;
-mod mods;
 use crate::args::{BuyArgs, CLIArgs, Command, CompileArgs, SellArgs, SetupArgs};
 use anyhow::anyhow;
 use chrono;
@@ -10,7 +9,7 @@ use futures_util::TryFutureExt;
 use gumdrop::Options;
 use inquire::{Confirm, Password, Select, Text};
 use rocket::http::hyper::body::HttpBody;
-use scriptless_zkcp::zk::{CircomParams, ZkEncryption, ZkPropertyVerifier2, ZkSampleEntries};
+use scriptless_zkcp::zk::{CircomParams, ZkEncryption, ZkSampleEntries, ZkVerifiableEncryption};
 use scriptless_zkcp::{
     cipher_host, keypair_from_bip39, keypair_from_hex, keypair_gen, write_to_keystore, BuyerConfig,
     CipherDownloader, CipherHost, Ethereum, LocalWallet, Seller, SellerConfig, Step1Msg, ZkConfig,
@@ -280,7 +279,7 @@ async fn compile(args: CompileArgs) -> anyhow::Result<()> {
     println!("compiling data encryption circuit...");
     let property_verifier =
         ZkSampleEntries::new(cfg.prop_verifier_dir.clone(), cfg.data_encryption_limit);
-    let prop_verification = ZkPropertyVerifier2::new(
+    let prop_verification = ZkVerifiableEncryption::new(
         &cfg.data_encryption_dir,
         property_verifier,
         encryption::Parameters::default_multi(cfg.data_encryption_limit),

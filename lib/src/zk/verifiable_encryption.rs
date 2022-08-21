@@ -12,7 +12,7 @@ use rand::{CryptoRng, Rng, RngCore};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
-pub struct ZkPropertyVerifier2<PV: PropertyVerifier> {
+pub struct ZkVerifiableEncryption<PV: PropertyVerifier> {
     build_dir: PathBuf,
     encryption: ZkEncryption,
     verifier: PV,
@@ -33,7 +33,7 @@ pub struct ProofOfProperty {
     pub arguments: Vec<(String, Vec<u8>)>,
 }
 
-impl<PV: PropertyVerifier> ZkPropertyVerifier2<PV> {
+impl<PV: PropertyVerifier> ZkVerifiableEncryption<PV> {
     pub fn new<P: AsRef<Path>>(
         build_dir: P,
         verifier: PV,

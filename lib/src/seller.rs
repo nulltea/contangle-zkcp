@@ -1,5 +1,5 @@
 use crate::traits::ChainProvider;
-use crate::zk::{PropertyVerifier, VerifiableEncryption, ZkEncryption, ZkPropertyVerifier2};
+use crate::zk::{PropertyVerifier, VerifiableEncryption, ZkEncryption, ZkVerifiableEncryption};
 use crate::{CipherHost, ZkConfig};
 use anyhow::anyhow;
 use circuits::{ark_to_bytes, encryption};
@@ -26,7 +26,7 @@ pub struct Seller<TChainProvider, TCipherHost, TPropVerifier: PropertyVerifier> 
     from_buyers: mpsc::Receiver<SellerMsg>,
     one_time_keys: HashMap<Address, Scalar>,
     decryption_key: Option<Vec<u8>>,
-    property_verifier: ZkPropertyVerifier2<TPropVerifier>,
+    verifiable_encryption: ZkVerifiableEncryption<TPropVerifier>,
     key_encryption: ZkEncryption,
 }
 
@@ -78,7 +78,7 @@ impl<TChainProvider: ChainProvider, TCipherHost: CipherHost, TPropVerifier: Prop
         let (to_seller, from_buyers) = mpsc::channel(1);
         let decryption_key =
             fs::read(cfg.cache_dir.join("decryption_key")).map_or(None, |b| Some(b));
-        let property_verifier = ZkPropertyVerifier2::new(
+        let verifiable_encryption = ZkVerifiableEncryption::new(
             &cfg.zk.data_encryption_dir,
             property_verifier,
             encryption::Parameters::default_multi(cfg.zk.data_encryption_limit),
@@ -94,7 +94,7 @@ impl<TChainProvider: ChainProvider, TCipherHost: CipherHost, TPropVerifier: Prop
                 from_buyers,
                 wallet,
                 decryption_key,
-                property_verifier,
+                verifiable_encryption,
                 key_encryption,
             },
             to_seller,
@@ -102,7 +102,7 @@ impl<TChainProvider: ChainProvider, TCipherHost: CipherHost, TPropVerifier: Prop
     }
 
     pub async fn step0_setup(&mut self, data: Vec<u8>) -> anyhow::Result<()> {
-        let (sk, pk) = self.property_verifier.keygen(&mut rand::thread_rng())?;
+        let (sk, pk) = self.verifiable_encryption.keygen(&mut rand::thread_rng())?;
 
         let sk_bytes = ark_to_bytes(sk.clone())
             .map_err(|e| anyhow!("error encoding elgamal secret key: {e}"))?;
@@ -114,7 +114,7 @@ impl<TChainProvider: ChainProvider, TCipherHost: CipherHost, TPropVerifier: Prop
         )
         .map_err(|e| anyhow!("error caching decryption key: {e}"))?;
 
-        let verifiable_encryption = self.property_verifier.assess_property_and_encrypt(
+        let verifiable_encryption = self.verifiable_encryption.assess_property_and_encrypt(
             data,
             sk,
             pk,

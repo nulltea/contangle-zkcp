@@ -1,5 +1,5 @@
 use crate::traits::ChainProvider;
-use crate::zk::{PropertyVerifier, VerifiableEncryption, ZkEncryption, ZkPropertyVerifier2};
+use crate::zk::{PropertyVerifier, VerifiableEncryption, ZkEncryption, ZkVerifiableEncryption};
 use crate::ZkConfig;
 use anyhow::anyhow;
 use backoff::ExponentialBackoff;
@@ -18,7 +18,7 @@ pub struct Buyer<TChainProvider, TPropVerifier: PropertyVerifier> {
     encrypted_key: Option<Vec<u8>>,
     one_time_pk: Option<Point>,
     encrypted_sig: Option<EncryptedSignature>,
-    data_encryption: ZkPropertyVerifier2<TPropVerifier>,
+    data_encryption: ZkVerifiableEncryption<TPropVerifier>,
     key_encryption: ZkEncryption,
 }
 
@@ -38,7 +38,7 @@ impl<TChainProvider: ChainProvider, TPropVerifier: PropertyVerifier>
     ) -> Self {
         let nonce_gen = Deterministic::<Sha256>::default();
         let adaptor = Adaptor::<HashTranscript<Sha256, ChaCha20Rng>, _>::new(nonce_gen);
-        let data_encryption = ZkPropertyVerifier2::new_verifier(
+        let data_encryption = ZkVerifiableEncryption::new_verifier(
             &cfg.zk.data_encryption_dir,
             property_verifier,
             encryption::Parameters::default_multi(cfg.zk.data_encryption_limit),
