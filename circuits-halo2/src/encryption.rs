@@ -1,319 +1,234 @@
-use crate::add_chip::{AddChip, AddConfig};
-use crate::constants::TestFixedBases;
-use ark_std::rand::{CryptoRng, RngCore};
-use halo2_gadgets::ecc::chip::{EccChip, EccConfig, EccPoint, NonIdentityEccPoint};
-use halo2_gadgets::ecc::{
-    BaseFitsInScalarInstructions, EccInstructions, FixedPoints, Point, ScalarVar,
-};
-use halo2_gadgets::poseidon::{
-    primitives::{self as poseidon, ConstantLength},
-    Hash as PoseidonHash, PoseidonSpongeInstructions, Pow5Chip as PoseidonChip,
-    Pow5Config as PoseidonConfig,
-};
-use halo2_gadgets::utilities::lookup_range_check::LookupRangeCheckConfig;
-use halo2_proofs::arithmetic::{Field, FieldExt};
-use halo2_proofs::circuit::{AssignedCell, Chip, Layouter, SimpleFloorPlanner, Value};
+use crate::utils::base_to_scalar;
+use ark_std::rand::{thread_rng, CryptoRng, RngCore};
+use group::ff::Field;
+use group::{Curve, Group};
+use halo2_ecc_circuit_lib::chips::ecc_chip::{AssignedPoint, EccChip, EccChipOps};
+use halo2_ecc_circuit_lib::chips::native_ecc_chip::NativeEccChip;
+use halo2_ecc_circuit_lib::five::base_gate::{FiveColumnBaseGate, FiveColumnBaseGateConfig};
+use halo2_ecc_circuit_lib::five::integer_chip::FiveColumnIntegerChip;
+use halo2_ecc_circuit_lib::five::range_gate::FiveColumnRangeGate;
+use halo2_ecc_circuit_lib::gates::base_gate::{AssignedValue, Context};
+use halo2_ecc_circuit_lib::gates::range_gate::RangeGateConfig;
+use halo2_proofs::circuit::{AssignedCell, Chip, Layouter, SimpleFloorPlanner};
 use halo2_proofs::dev::MockProver;
-use halo2_proofs::pasta::group::{Curve, Group};
-use halo2_proofs::pasta::{pallas, Fp};
 use halo2_proofs::plonk;
 use halo2_proofs::plonk::{Advice, Circuit, Column, ConstraintSystem, Error, Instance};
-use pasta_curves::arithmetic::CurveAffine;
+use halo2_snark_aggregator_api::arith::common::ArithCommonChip;
+use halo2_snark_aggregator_api::arith::ecc::ArithEccChip;
+use halo2_snark_aggregator_api::hash::poseidon::PoseidonChip;
+use halo2_snark_aggregator_circuit::chips::scalar_chip::ScalarChip;
+use halo2_snark_aggregator_circuit::sample_circuit::TargetCircuit;
+use pairing_bn256::arithmetic::{CurveAffine, CurveExt, MultiMillerLoop};
+use pairing_bn256::bn256::{Fq as Base, Fr as Scalar, Fr, G1Affine, G1Affine as Affine, G1};
 use std::ffi::c_void;
+use std::marker::PhantomData;
 use std::ops::{Mul, MulAssign};
 
-// Absolute offsets for public inputs.
-const C1_X: usize = 0;
-const C1_Y: usize = 1;
-const C2: usize = 2;
-
-/// An instruction set for adding two circuit words (field elements).
-pub trait AddInstruction<F: FieldExt>: Chip<F> {
-    /// Constraints `a + b` and returns the sum.
-    fn add(
-        &self,
-        layouter: impl Layouter<F>,
-        a: &AssignedCell<F, F>,
-        b: &AssignedCell<F, F>,
-    ) -> Result<AssignedCell<F, F>, plonk::Error>;
-}
-
-struct ElGamalChip {
-    config: ElGamalConfig,
-    ecc: EccChip<TestFixedBases>,
-    poseidon: PoseidonChip<pallas::Base, 3, 2>,
-    add: AddChip,
-}
-
 #[derive(Debug, Clone)]
-struct ElGamalConfig {
-    ecc_config: EccConfig<TestFixedBases>,
-    poseidon_config: PoseidonConfig<pallas::Base, 3, 2>,
-    add_config: AddConfig,
-    plaintext_col: Column<Advice>,
-    ciphertext_res_col: Column<Advice>,
-    ciphertext_c1x_exp_col: Column<Instance>,
-    ciphertext_c1y_exp_col: Column<Instance>,
-    ciphertext_c2_exp_col: Column<Instance>,
+pub struct ElGamalConfig {
+    base_gate_config: FiveColumnBaseGateConfig,
+    range_gate_config: RangeGateConfig,
 }
 
-impl Chip<pallas::Base> for ElGamalChip {
-    type Config = ElGamalConfig;
-    type Loaded = ();
-
-    fn config(&self) -> &Self::Config {
-        &self.config
-    }
-
-    fn loaded(&self) -> &Self::Loaded {
-        &()
-    }
-}
-
-impl ElGamalChip {
-    fn new(p: ElGamalConfig) -> ElGamalChip {
-        ElGamalChip {
-            ecc: EccChip::construct(p.ecc_config.clone()),
-            poseidon: PoseidonChip::construct(p.poseidon_config.clone()),
-            add: AddChip::construct(p.add_config.clone()),
-            config: p,
-        }
-    }
-
-    fn configure(meta: &mut ConstraintSystem<pallas::Base>) -> ElGamalConfig {
-        let advices = [
-            meta.advice_column(),
-            meta.advice_column(),
-            meta.advice_column(),
-            meta.advice_column(),
-            meta.advice_column(),
-            meta.advice_column(),
-            meta.advice_column(),
-            meta.advice_column(),
-            meta.advice_column(),
-            meta.advice_column(),
-        ];
-
-        let table_idx = meta.lookup_table_column();
-
-        // Poseidon requires four advice columns, while ECC incomplete addition requires
-        // six, so we could choose to configure them in parallel. However, we only use a
-        // single Poseidon invocation, and we have the rows to accommodate it serially.
-        // Instead, we reduce the proof size by sharing fixed columns between the ECC and
-        // Poseidon chips.
-        let lagrange_coeffs = [
-            meta.fixed_column(),
-            meta.fixed_column(),
-            meta.fixed_column(),
-            meta.fixed_column(),
-            meta.fixed_column(),
-            meta.fixed_column(),
-            meta.fixed_column(),
-            meta.fixed_column(),
-        ];
-        let rc_a = lagrange_coeffs[2..5].try_into().unwrap();
-        let rc_b = lagrange_coeffs[5..8].try_into().unwrap();
-
-        // Also use the first Lagrange coefficient column for loading global constants.
-        // It's free real estate :)
-        meta.enable_constant(lagrange_coeffs[0]);
-
-        // Shared fixed column for loading constants
-        let range_check = LookupRangeCheckConfig::configure(meta, advices[9], table_idx);
-        let ecc_config =
-            EccChip::<TestFixedBases>::configure(meta, advices, lagrange_coeffs, range_check);
-
-        let poseidon_config = PoseidonChip::configure::<poseidon::P128Pow5T3>(
-            meta,
-            advices[6..9].try_into().unwrap(),
-            advices[5],
-            rc_a,
-            rc_b,
-        );
-
-        let dh_col = meta.advice_column();
-        meta.enable_equality(dh_col);
-        let plaintext_col = meta.advice_column();
-        meta.enable_equality(plaintext_col);
-        let ciphertext_res_col = meta.advice_column();
-        meta.enable_equality(ciphertext_res_col);
-
-        let add_config = AddChip::configure(meta, dh_col, plaintext_col, ciphertext_res_col);
-
-        let ciphertext_c1x_exp_col = meta.instance_column();
-        let ciphertext_c1y_exp_col = meta.instance_column();
-        meta.enable_equality(ciphertext_c1x_exp_col);
-        meta.enable_equality(ciphertext_c1y_exp_col);
-
-        let ciphertext_c2_exp_col = meta.instance_column();
-        meta.enable_equality(ciphertext_c2_exp_col);
-
-        ElGamalConfig {
-            poseidon_config,
-            ecc_config,
-            add_config,
-            plaintext_col,
-            ciphertext_res_col,
-            ciphertext_c1x_exp_col,
-            ciphertext_c1y_exp_col,
-            ciphertext_c2_exp_col,
-        }
-    }
-}
+const COMMON_RANGE_BITS: usize = 17usize;
 
 #[derive(Default)]
-struct ElGamalGadget {
-    r: pallas::Scalar, // this should be Scalar, but current version of halo2_gadgets does not support full width scalar
-    msg: pallas::Base,
-    pk: pallas::Point,
-    pub resulted_ciphertext: (pallas::Point, pallas::Base),
+pub struct ElGamalCircuit<C: CurveAffine> {
+    r: C::ScalarExt,
+    msg: C::ScalarExt,
+    pk: C::CurveExt,
+    pub resulted_ciphertext: (C::CurveExt, C::ScalarExt),
 }
 
-impl ElGamalGadget {
+impl<C: CurveAffine> ElGamalCircuit<C> {
     pub fn keygen<R: CryptoRng + RngCore>(
         mut rng: &mut R,
-    ) -> anyhow::Result<(pallas::Scalar, pallas::Point)> {
+    ) -> anyhow::Result<(C::ScalarExt, C::CurveExt)> {
         // get a random element from the scalar field
-        let secret_key = pallas::Scalar::random(&mut rng);
+        let secret_key = C::ScalarExt::random(&mut rng);
 
-        // compute secret_key*generator to derive the public key
-        let mut public_key = pallas::Point::generator();
-        public_key.mul_assign(secret_key.clone());
+        // derive public_key = generator*secret_key
+        let mut public_key = C::generator() * secret_key;
 
         Ok((secret_key, public_key))
     }
 
     pub fn encrypt(
-        pk: pallas::Point,
-        msg: pallas::Base,
-        r: pallas::Scalar,
-    ) -> anyhow::Result<(pallas::Point, pallas::Base)> {
-        let c1 = pallas::Point::generator().mul(&r);
-        let p_ra = pk.mul(&r).to_affine().coordinates().unwrap();
+        pk: C::CurveExt,
+        msg: C::ScalarExt,
+        r: C::ScalarExt,
+    ) -> anyhow::Result<(C::CurveExt, C::ScalarExt)>
+    where
+        C::ScalarExt: halo2_proofs::arithmetic::FieldExt,
+    {
+        let c1 = C::CurveExt::generator() * r;
+        let (p_rx, p_ry, _) = pk.mul(&r).jacobian_coordinates();
+        let p_rx = base_to_scalar::<_, C::ScalarExt>(&p_rx);
+        let p_ry = base_to_scalar::<_, C::ScalarExt>(&p_ry);
 
-        let mut hasher =
-            poseidon::Hash::<pallas::Base, poseidon::P128Pow5T3, ConstantLength<2>, 3, 2>::init();
-        let dh = hasher.hash([p_ra.x().clone(), p_ra.y().clone()]);
+        let mut hasher = poseidon::Poseidon::<C::ScalarExt, 3, 2>::new(8usize, 33usize);
+        hasher.update(&[p_rx.clone(), p_ry.clone()]);
+        let dh = hasher.squeeze();
         let c2 = msg + dh;
 
         return Ok((c1, c2));
     }
 
-    pub(crate) fn verify_encryption<
-        PoseidonChip: PoseidonSpongeInstructions<pallas::Base, poseidon::P128Pow5T3, ConstantLength<2>, 3, 2>,
-        AddChip: AddInstruction<pallas::Base>,
-        // EccChip: EccInstructions<
-        //     pallas::Affine,
-        //     FixedPoints = TestFixedBases,
-        //     Var = AssignedCell<pallas::Base, pallas::Base>,
-        // >,
-    >(
+    pub(crate) fn verify_encryption<'a, 'b>(
         &self,
-        mut layouter: impl Layouter<pallas::Base>,
-        poseidon_chip: PoseidonChip,
-        add_chip: AddChip,
-        ecc_chip: EccChip<TestFixedBases>,
-        m: &AssignedCell<pallas::Base, pallas::Base>,
-    ) -> Result<(EccPoint, AssignedCell<pallas::Base, pallas::Base>), plonk::Error> {
-        let g = pallas::Point::generator();
+        ctx: &mut Context<'b, C::ScalarExt>,
+        aff_chip: &ScalarChip<'a, 'b, C::ScalarExt>,
+        ecc_chip: &NativeEccChip<'a, C>,
+        msg: &AssignedValue<C::ScalarExt>,
+    ) -> Result<(AssignedPoint<C, C::ScalarExt>, AssignedValue<C::ScalarExt>), plonk::Error> {
+        let g = C::generator();
 
         // compute s = randomness*pk
-        let s = self.pk.clone().mul(self.r).to_affine();
-        let s = ecc_chip
-            .witness_point(&mut layouter, Value::known(s))
-            .unwrap();
+        let s = self.pk * self.r;
+        let si = ecc_chip.assign_point(ctx, s).unwrap();
 
         // compute c1 = randomness*generator
-        let c1 = g.mul(self.r).to_affine();
-        let c1 = ecc_chip
-            .witness_point(&mut layouter, Value::known(c1))
-            .unwrap();
+        let c1 = g.mul(self.r);
+        let c1 = ecc_chip.assign_point(ctx, c1).unwrap();
 
         // compute dh = poseidon_hash(randomness*pk)
+        let mut hasher =
+            PoseidonChip::<_, 3usize, 2usize>::new(ctx, aff_chip, 8usize, 33usize).unwrap();
         let dh = {
-            let poseidon_message = [s.x(), s.y()];
-            let poseidon_hasher =
-                PoseidonHash::init(poseidon_chip, layouter.namespace(|| "Poseidon hasher"))?;
-            poseidon_hasher.hash(
-                layouter.namespace(|| "Poseidon hash (randomness*pk)"),
-                poseidon_message,
-            )?
-        };
+            hasher.update(&[si.x.native.unwrap(), si.y.native.unwrap()]);
+            hasher.squeeze(ctx, &aff_chip)
+        }
+        .unwrap();
 
-        // compute c2 = poseidon_hash(nk, rho) + psi.
-        let c2 = add_chip.add(
-            layouter.namespace(|| "c2 = poseidon_hash(randomness*pk) + m"),
-            &dh,
-            m,
-        )?;
+        // compute c2 = poseidon_hash(nk, rho) + msg.
+        let c2 = aff_chip.add(ctx, &dh, msg).unwrap();
 
         Ok((c1, c2))
     }
 }
 
-impl Circuit<pallas::Base> for ElGamalGadget {
+impl<C: CurveAffine> Circuit<C::ScalarExt> for ElGamalCircuit<C>
+where
+    C::ScalarExt: halo2_proofs::arithmetic::Field,
+{
     type Config = ElGamalConfig;
     type FloorPlanner = SimpleFloorPlanner;
     fn without_witnesses(&self) -> Self {
         Self::default()
     }
     //type Config = EccConfig;
-    fn configure(cs: &mut ConstraintSystem<pallas::Base>) -> Self::Config {
-        ElGamalChip::configure(cs)
+    fn configure(meta: &mut ConstraintSystem<C::ScalarExt>) -> Self::Config {
+        let base_gate_config = FiveColumnBaseGate::<C::ScalarExt>::configure(meta);
+        let range_gate_config =
+            FiveColumnRangeGate::<'_, C::Base, C::ScalarExt, COMMON_RANGE_BITS>::configure(
+                meta,
+                &base_gate_config,
+            );
+
+        ElGamalConfig {
+            base_gate_config,
+            range_gate_config,
+        }
     }
+
     fn synthesize(
         &self,
         config: Self::Config,
-        mut layouter: impl Layouter<pallas::Base>,
+        mut layouter: impl Layouter<C::ScalarExt>,
     ) -> Result<(), Error> {
-        let chip = ElGamalChip::new(config.clone());
+        let base_gate = FiveColumnBaseGate::new(config.base_gate_config);
+        let range_gate = FiveColumnRangeGate::<'_, C::Base, C::ScalarExt, COMMON_RANGE_BITS>::new(
+            config.range_gate_config,
+            &base_gate,
+        );
+        let integer_gate = FiveColumnIntegerChip::new(&range_gate);
+        let scalar_chip = ScalarChip::new(&base_gate);
+        let ecc_chip = NativeEccChip::new(&integer_gate);
 
-        let msg_var = layouter.assign_region(
-            || "plaintext",
-            |mut region| {
-                region.assign_advice(
-                    || "plaintext",
-                    config.plaintext_col,
-                    0,
-                    || Value::known(self.msg),
-                )
+        range_gate
+            .init_table(&mut layouter, &integer_gate.helper.integer_modulus)
+            .unwrap();
+
+        layouter.assign_region(
+            || "elgmal_encryption",
+            move |mut region| {
+                let base_offset = 0usize;
+                let mut ctx = Context::new(region, base_offset);
+                let msg = scalar_chip.assign_var(&mut ctx, self.msg.clone()).unwrap();
+                let mut c1_exp = ecc_chip.assign_identity(&mut ctx).unwrap();
+
+                let (mut c1, c2) =
+                    self.verify_encryption(&mut ctx, &scalar_chip, &ecc_chip, &msg)?;
+
+                //layouter.constrain_instance(c2.cell(), config.ciphertext_c2_exp_col, C2)
+                ecc_chip.assert_equal(&mut ctx, &mut c1, &mut c1_exp)
             },
-        )?;
-
-        let (c1, c2) = self.verify_encryption(
-            layouter.namespace(|| "verify_encryption"),
-            chip.poseidon,
-            chip.add,
-            chip.ecc,
-            &msg_var,
-        )?;
-
-        layouter
-            .constrain_instance(c1.x().cell(), config.ciphertext_c1x_exp_col, C1_X)
-            .and(layouter.constrain_instance(c1.y().cell(), config.ciphertext_c1y_exp_col, C1_Y))
-            .and(layouter.constrain_instance(c2.cell(), config.ciphertext_c2_exp_col, C2))
+        )
     }
 }
+
+pub struct ElGamalTargetCircuit;
+//
+// impl<C: CurveAffine, E: MultiMillerLoop<G1Affine = C>> TargetCircuit<C, E>
+//     for ElGamalTargetCircuit
+// {
+//     const TARGET_CIRCUIT_K: u32 = 7;
+//     const PUBLIC_INPUT_SIZE: usize = 1;
+//     const N_PROOFS: usize = 2;
+//     const NAME: &'static str = "simple_example";
+//     const PARAMS_NAME: &'static str = "simple_example";
+//
+//     type Circuit = ElGamalCircuit<Fr>;
+//
+//     fn instance_builder() -> (Self::Circuit, Vec<Vec<C::ScalarExt>>) {
+//         let (sk, pk) = ElGamalCircuit::<C>::keygen(&mut rng).unwrap();
+//
+//         let r = C::ScalarExt::random(&mut rng);
+//         let msg = C::ScalarExt::random(&mut rng);
+//         let resulted_ciphertext =
+//             ElGamalCircuit::encrypt(pk.clone(), msg.clone(), r.clone()).unwrap();
+//
+//         let circuit = ElGamalCircuit::<C> {
+//             r,
+//             msg,
+//             pk,
+//             resulted_ciphertext,
+//         };
+//
+//         let c1_coordinates = circuit
+//             .resulted_ciphertext
+//             .0
+//             .jacobian_coordinates()
+//
+//         let instances = vec![
+//             vec![c1_coordinates[0]],
+//             vec![c1_coordinates[1]],
+//             vec![circuit.resulted_ciphertext.1],
+//         ];
+//
+//         (circuit, instances)
+//     }
+// }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::utils::base_to_scalar;
     use anyhow::anyhow;
     use ark_std::test_rng;
-    use halo2_proofs::arithmetic::Field;
 
     #[test]
     fn test_circuit_elgmal() {
         let mut rng = test_rng();
 
-        let (sk, pk) = ElGamalGadget::keygen(&mut rng).unwrap();
+        let (sk, pk) = ElGamalCircuit::<G1Affine>::keygen(&mut rng).unwrap();
 
-        let r = pallas::Scalar::random(&mut rng);
-        let msg = pallas::Base::random(&mut rng);
+        let r = Fr::random(&mut rng);
+        let msg = Fr::random(&mut rng);
         let resulted_ciphertext =
-            ElGamalGadget::encrypt(pk.clone(), msg.clone(), r.clone()).unwrap();
+            ElGamalCircuit::<G1Affine>::encrypt(pk.clone(), msg.clone(), r.clone()).unwrap();
 
-        let circuit: ElGamalGadget = ElGamalGadget {
+        let circuit = ElGamalCircuit::<G1Affine> {
             r,
             msg,
             pk,
@@ -327,12 +242,12 @@ mod tests {
             .coordinates()
             .map(|c| vec![c.x().clone(), c.y().clone()])
             .unwrap();
-        let public_inputs = vec![
-            vec![c1_coordinates[0]],
-            vec![c1_coordinates[1]],
-            vec![circuit.resulted_ciphertext.1],
+        let instance = vec![
+            vec![base_to_scalar(&c1_coordinates[0])],
+            vec![base_to_scalar(&c1_coordinates[1])],
+            //vec![circuit.resulted_ciphertext.1],
         ];
-        let prover = MockProver::run(12, &circuit, public_inputs)
+        let prover = MockProver::run(12, &circuit, instance)
             .map_err(|e| anyhow!("error: {}", e))
             .unwrap();
     }
