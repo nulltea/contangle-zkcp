@@ -23,3 +23,5 @@ build/
 *.sym
 
 zk-config.json
+
+circuits-circom/zkPhoto

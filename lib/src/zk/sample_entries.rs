@@ -16,7 +16,7 @@ use circuits::{
 };
 use rand::{CryptoRng, Rng, RngCore};
 use std::path::{Path, PathBuf};
-use std::{fs, iter};
+use std::{fs};
 
 pub struct ZkSampleEntries {
     build_dir: PathBuf,
@@ -108,7 +108,7 @@ impl PropertyVerifier for ZkSampleEntries {
 
     fn verify_proof(&self, args: ProofOfProperty, public_inputs: Vec<Fq>) -> anyhow::Result<bool> {
         let proof = ark_from_bytes(args.proof)?;
-        let mut sample_value = args
+        let sample_value = args
             .arguments
             .into_iter()
             .map(|(_, a)| ark_from_bytes(a))

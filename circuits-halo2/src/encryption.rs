@@ -1,33 +1,31 @@
 use crate::utils::base_to_scalar;
-use ark_std::rand::{thread_rng, CryptoRng, RngCore};
+use ark_std::rand::{CryptoRng, RngCore};
 use group::ff::Field;
-use group::{Curve, Group};
-use halo2_ecc_circuit_lib::chips::ecc_chip::{AssignedPoint, EccChip, EccChipOps};
+use group::Group;
+use halo2_ecc_circuit_lib::chips::ecc_chip::{AssignedPoint, EccChipOps};
+use halo2_ecc_circuit_lib::chips::integer_chip::{AssignedInteger, IntegerChipOps};
 use halo2_ecc_circuit_lib::chips::native_ecc_chip::NativeEccChip;
 use halo2_ecc_circuit_lib::five::base_gate::{FiveColumnBaseGate, FiveColumnBaseGateConfig};
 use halo2_ecc_circuit_lib::five::integer_chip::FiveColumnIntegerChip;
 use halo2_ecc_circuit_lib::five::range_gate::FiveColumnRangeGate;
 use halo2_ecc_circuit_lib::gates::base_gate::{AssignedValue, Context};
 use halo2_ecc_circuit_lib::gates::range_gate::RangeGateConfig;
-use halo2_proofs::circuit::{AssignedCell, Chip, Layouter, SimpleFloorPlanner};
-use halo2_proofs::dev::MockProver;
+use halo2_proofs::circuit::{Layouter, SimpleFloorPlanner};
 use halo2_proofs::plonk;
-use halo2_proofs::plonk::{Advice, Circuit, Column, ConstraintSystem, Error, Instance};
+use halo2_proofs::plonk::{Circuit, Column, ConstraintSystem, Error, Instance};
 use halo2_snark_aggregator_api::arith::common::ArithCommonChip;
-use halo2_snark_aggregator_api::arith::ecc::ArithEccChip;
 use halo2_snark_aggregator_api::hash::poseidon::PoseidonChip;
 use halo2_snark_aggregator_circuit::chips::scalar_chip::ScalarChip;
-use halo2_snark_aggregator_circuit::sample_circuit::TargetCircuit;
-use pairing_bn256::arithmetic::{CurveAffine, CurveExt, MultiMillerLoop};
-use pairing_bn256::bn256::{Fq as Base, Fr as Scalar, Fr, G1Affine, G1Affine as Affine, G1};
-use std::ffi::c_void;
-use std::marker::PhantomData;
-use std::ops::{Mul, MulAssign};
+use pairing_bn256::arithmetic::{CurveAffine, CurveExt};
+use std::ops::MulAssign;
 
 #[derive(Debug, Clone)]
 pub struct ElGamalConfig {
     base_gate_config: FiveColumnBaseGateConfig,
     range_gate_config: RangeGateConfig,
+    c1_x: Column<Instance>,
+    c1_y: Column<Instance>,
+    c2: Column<Instance>,
 }
 
 const COMMON_RANGE_BITS: usize = 17usize;
@@ -48,7 +46,7 @@ impl<C: CurveAffine> ElGamalCircuit<C> {
         let secret_key = C::ScalarExt::random(&mut rng);
 
         // derive public_key = generator*secret_key
-        let mut public_key = C::generator() * secret_key;
+        let public_key = C::generator() * secret_key;
 
         Ok((secret_key, public_key))
     }
@@ -61,8 +59,10 @@ impl<C: CurveAffine> ElGamalCircuit<C> {
     where
         C::ScalarExt: halo2_proofs::arithmetic::FieldExt,
     {
-        let c1 = C::CurveExt::generator() * r;
-        let (p_rx, p_ry, _) = pk.mul(&r).jacobian_coordinates();
+        let mut c1 = C::CurveExt::generator();
+        c1.mul_assign(r.clone());
+
+        let (p_rx, p_ry, _) = (pk * r).jacobian_coordinates();
         let p_rx = base_to_scalar::<_, C::ScalarExt>(&p_rx);
         let p_ry = base_to_scalar::<_, C::ScalarExt>(&p_ry);
 
@@ -81,15 +81,16 @@ impl<C: CurveAffine> ElGamalCircuit<C> {
         ecc_chip: &NativeEccChip<'a, C>,
         msg: &AssignedValue<C::ScalarExt>,
     ) -> Result<(AssignedPoint<C, C::ScalarExt>, AssignedValue<C::ScalarExt>), plonk::Error> {
-        let g = C::generator();
+        // compute c1 = randomness*generator
+        let mut c1 = C::CurveExt::generator();
+        c1.mul_assign(self.r);
+
+        let c1 = ecc_chip.assign_point(ctx, c1).unwrap();
 
         // compute s = randomness*pk
-        let s = self.pk * self.r;
+        let mut s = self.pk.clone();
+        s.mul_assign(self.r);
         let si = ecc_chip.assign_point(ctx, s).unwrap();
-
-        // compute c1 = randomness*generator
-        let c1 = g.mul(self.r);
-        let c1 = ecc_chip.assign_point(ctx, c1).unwrap();
 
         // compute dh = poseidon_hash(randomness*pk)
         let mut hasher =
@@ -124,10 +125,20 @@ where
                 meta,
                 &base_gate_config,
             );
+        let c1_x = meta.instance_column();
+        meta.enable_equality(c1_x);
+        let c1_y = meta.instance_column();
+        meta.enable_equality(c1_y);
+
+        let c2 = meta.instance_column();
+        meta.enable_equality(c2);
 
         ElGamalConfig {
             base_gate_config,
             range_gate_config,
+            c1_x,
+            c1_y,
+            c2,
         }
     }
 
@@ -144,26 +155,25 @@ where
         let integer_gate = FiveColumnIntegerChip::new(&range_gate);
         let scalar_chip = ScalarChip::new(&base_gate);
         let ecc_chip = NativeEccChip::new(&integer_gate);
-
         range_gate
             .init_table(&mut layouter, &integer_gate.helper.integer_modulus)
             .unwrap();
 
-        layouter.assign_region(
+        let (c1, c2) = layouter.assign_region(
             || "elgmal_encryption",
-            move |mut region| {
+            move |region| {
                 let base_offset = 0usize;
                 let mut ctx = Context::new(region, base_offset);
                 let msg = scalar_chip.assign_var(&mut ctx, self.msg.clone()).unwrap();
-                let mut c1_exp = ecc_chip.assign_identity(&mut ctx).unwrap();
 
-                let (mut c1, c2) =
-                    self.verify_encryption(&mut ctx, &scalar_chip, &ecc_chip, &msg)?;
-
-                //layouter.constrain_instance(c2.cell(), config.ciphertext_c2_exp_col, C2)
-                ecc_chip.assert_equal(&mut ctx, &mut c1, &mut c1_exp)
+                self.verify_encryption(&mut ctx, &scalar_chip, &ecc_chip, &msg)
             },
-        )
+        )?;
+
+        layouter
+            .constrain_instance(c1.x.native.unwrap().cell, config.c1_x, 0)
+            .and(layouter.constrain_instance(c1.y.native.unwrap().cell, config.c1_y, 0))
+            .and(layouter.constrain_instance(c2.cell, config.c2, 0))
     }
 }
 
@@ -216,12 +226,15 @@ mod tests {
     use crate::utils::base_to_scalar;
     use anyhow::anyhow;
     use ark_std::test_rng;
+    use group::Curve;
+    use halo2_proofs::dev::MockProver;
+    use pairing_bn256::bn256::{Fr, G1Affine};
 
     #[test]
     fn test_circuit_elgmal() {
         let mut rng = test_rng();
 
-        let (sk, pk) = ElGamalCircuit::<G1Affine>::keygen(&mut rng).unwrap();
+        let (_sk, pk) = ElGamalCircuit::<G1Affine>::keygen(&mut rng).unwrap();
 
         let r = Fr::random(&mut rng);
         let msg = Fr::random(&mut rng);
@@ -243,11 +256,11 @@ mod tests {
             .map(|c| vec![c.x().clone(), c.y().clone()])
             .unwrap();
         let instance = vec![
-            vec![base_to_scalar(&c1_coordinates[0])],
             vec![base_to_scalar(&c1_coordinates[1])],
-            //vec![circuit.resulted_ciphertext.1],
+            vec![base_to_scalar(&c1_coordinates[0])],
+            vec![circuit.resulted_ciphertext.1],
         ];
-        let prover = MockProver::run(12, &circuit, instance)
+        let _prover = MockProver::run(18, &circuit, instance)
             .map_err(|e| anyhow!("error: {}", e))
             .unwrap();
     }
